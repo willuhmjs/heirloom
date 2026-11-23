@@ -16,12 +16,52 @@ jobs:
           go-version-file: go.mod
       # The mover runs are all restic now; without the binary the runner tests skip silently.
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq restic
+      - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+      # -race needs CGO and a C compiler; the ubuntu runner has both, and the test binaries are not
+      # the shipped image (the Makefile build stays CGO_ENABLED=0).
+      - name: Test
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Coverage summary
+        if: always()
+        run: |
+          # go test still writes the profile when a test fails, but show it only if there is one.
+          [ -s coverage.out ] || exit 0
+          {
+            echo "## Go test coverage"
+            echo
+            total=$(go tool cover -func=coverage.out | awk '/^total:/ { print $NF }')
+            echo "Statements: **${total}**"
+            echo
+            echo '```text'
+            # Per-package coverage. The location field looks like <importpath>/<file>.go:<line-range>;
+            # the two subs strip the range, then the file name. String regexes, not regex literals,
+            # because a bare / inside a /.../ literal trips mawk and BSD awk.
+            awk 'NR > 1 {
+              pkg = $1; sub(":[0-9].*$", "", pkg); sub("[/][^/]*[.]go$", "", pkg)
+              if ($3 + 0 > 0) hit[pkg] += $2; all[pkg] += $2
+            }
+            END { for (p in all) printf "%6.1f%%  %s\n", 100 * hit[p] / all[p], p }' coverage.out | sort -k2
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Generated CRDs are up to date
         run: |
           make manifests
           git diff --exit-code config/crd charts/backshots/crds
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      # Linters and the gofmt/goimports formatters all come from .golangci.yml (golangci-lint v2
+      # schema); in v2 `golangci-lint run` reports enabled formatters, so this one invocation is
+      # the whole gate. The linter version is pinned to a specific release, not a floating tag.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          only-affected-files: false
   helm:
     runs-on: ubuntu-latest
     steps:

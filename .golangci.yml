@@ -1,0 +1,20 @@
+# golangci-lint v2 configuration. Keep it lean: the standard set (errcheck, govet, ineffassign,
+# staticcheck, unused — gosimple is folded into staticcheck in v2) plus the two formatters, which
+# v2 keeps in their own section and checks with `golangci-lint fmt`.
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/willuhmjs/backshots
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
