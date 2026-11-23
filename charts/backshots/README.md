@@ -23,10 +23,13 @@ write as root (`no_root_squash`), because the movers preserve file ownership.
 | `image.repository` / `image.tag` | `ghcr.io/willuhmjs/backshots` / chart appVersion | the operator and mover image |
 | `imagePullSecrets` | `[]` | for a private mirror of the image |
 | `leaderElection` | `true` | leader election for the manager |
+| `replicas` | `1` | manager replicas; >1 makes updates rolling (leader election on) |
+| `podDisruptionBudget.enabled` / `.minAvailable` / `.maxUnavailable` | `false` / `1` / `1` | optional PDB for the manager |
+| `crdHooks.enabled` | `true` | apply the image-embedded CRDs on every install/upgrade (Helm only installs `crds/` once) |
 | `metrics.secure` | `true` | serve metrics over TLS and require an authenticated, authorized caller |
 | `serviceMonitor.enabled` | `false` | render a Prometheus Operator ServiceMonitor |
 | `store.create` | `false` | also render a default cluster-scoped `BackupStore` |
-| `store.name`, `store.nfs.server`, `store.nfs.path`, `store.retention` | | the default store |
+| `store.name`, `store.nfs.server`, `store.nfs.path`, `store.nfs.mountOptions`, `store.retention` | | the default store (`mountOptions` make movers mount it through a provisioned static PV/PVC, because inline NFS cannot carry options) |
 | `resources`, `nodeSelector`, `tolerations`, `podAnnotations` | small defaults | for the manager pod |
 
 ## CRDs

@@ -21,6 +21,20 @@ podAnnotations: {}
 
 leaderElection: true
 
+# Replicas of the manager. More than one needs leaderElection (the default) and becomes a rolling
+# update; the PDB keeps a voluntary eviction from taking the last replica down with it.
+replicas: 1
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: 1
+
+# Apply the CRDs embedded in the image on every install and upgrade (Helm would only ever install
+# crds/ once). Disable only if you manage CRDs yourself.
+crdHooks:
+  enabled: true
+
 # Metrics are served over TLS and require an authenticated, authorized caller. Bind the ClusterRole
 # <release>-metrics-reader to whatever scrapes them (the ServiceMonitor below uses Prometheus's token).
 metrics:
@@ -38,5 +52,8 @@ store:
   nfs:
     server: ""
     path: ""
+    # Passed verbatim to the store mount, e.g. ["nfsvers=4.1", "hard"]. Sets the operator
+    # provisioning a static PV/PVC per namespace (inline NFS volumes cannot carry options).
+    mountOptions: []
   # Defaults when omitted: hourly=24 daily=30 weekly=12 monthly=24
   retention: {}

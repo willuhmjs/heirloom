@@ -46,6 +46,34 @@
     "leaderElection": {
       "type": "boolean"
     },
+    "replicas": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxUnavailable": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "crdHooks": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "serviceMonitor": {
       "type": "object",
       "properties": {
@@ -78,6 +106,12 @@
             },
             "path": {
               "type": "string"
+            },
+            "mountOptions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         },

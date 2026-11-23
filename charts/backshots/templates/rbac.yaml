@@ -23,7 +23,24 @@ rules:
   # A restore checks that the claim it writes to exists before it stops any workload (uncached get only).
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
-    verbs: [get]
+    verbs: [get, create, patch]
+  # A store with mountOptions is mounted through a provisioned static PV/PVC (inline NFS volumes
+  # cannot carry mount options); the PV is only a pointer at the export, never a data deleter.
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, create, delete]
+  # The command source maintains a namespace-local executor identity (SA + Role + RoleBinding) whose
+  # only power is reading pods and creating pods/exec for the policy's mover pods.
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, create]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, create, patch]
+  # A Restore pauses autoscalers targeting the workloads it stops, then puts their bounds back.
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, update, patch]
   # Secure metrics: authenticate the caller's token and authorize it for /metrics.
   - apiGroups: [authentication.k8s.io]
     resources: [tokenreviews]
