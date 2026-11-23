@@ -527,6 +527,33 @@ func TestFailedJobWithoutTerminationMessage(t *testing.T) {
 	}
 }
 
+// engine restic is files-only for now; validatePolicy mirrors the CRD's CEL rule.
+func TestResticEngineOnlyFilesSource(t *testing.T) {
+	for _, src := range []struct {
+		name string
+		p    *v1alpha1.BackupPolicy
+	}{{"sqlite", sqlitePolicy()}, {"postgres", postgresPolicy()}} {
+		src.p.Spec.Engine = v1alpha1.EngineRestic
+		if err := validatePolicy(src.p); err == nil {
+			t.Errorf("engine restic on a %s source must be rejected", src.name)
+		}
+	}
+	p := filesPolicy()
+	p.Spec.Engine = v1alpha1.EngineRestic
+	if err := validatePolicy(p); err != nil {
+		t.Errorf("engine restic on a files source: %v", err)
+	}
+	// The default (and the zero value, which the API server never stores but Go tests construct) means snapshots.
+	q := filesPolicy()
+	if err := validatePolicy(q); err != nil {
+		t.Errorf("unset engine must behave as snapshots: %v", err)
+	}
+	q.Spec.Engine = "kopia"
+	if err := validatePolicy(q); err == nil {
+		t.Error("an unknown engine must be rejected")
+	}
+}
+
 func TestVerifyNeedsDatabaseWhenAmbiguous(t *testing.T) {
 	p := postgresPolicy()
 	p.Spec.Verify = &v1alpha1.Verify{Schedule: "@daily", SQL: []string{"select true"}}

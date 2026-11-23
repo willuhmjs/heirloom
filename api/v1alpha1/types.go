@@ -56,6 +56,17 @@ type BackupStoreList struct {
 	Items           []BackupStore `json:"items"`
 }
 
+// Engine selects how a policy stores its backups. snapshots (the default) writes plain hardlinked snapshot
+// folders; restic stores data in a restic repository inside the policy's own store directory, so changed large
+// files are stored as chunks instead of copied whole.
+// +kubebuilder:validation:Enum=snapshots;restic
+type Engine string
+
+const (
+	EngineSnapshots Engine = "snapshots"
+	EngineRestic    Engine = "restic"
+)
+
 // SourceType selects how data is captured.
 // +kubebuilder:validation:Enum=files;sqlite;postgres
 type SourceType string
@@ -177,6 +188,7 @@ type PodOptions struct {
 }
 
 // BackupPolicySpec describes one thing to back up.
+// +kubebuilder:validation:XValidation:rule="self.engine != 'restic' || self.source.type == 'files'",message="engine restic only supports source.type files"
 type BackupPolicySpec struct {
 	// StoreRef names a cluster-scoped BackupStore.
 	// +kubebuilder:validation:MinLength=1
@@ -188,7 +200,14 @@ type BackupPolicySpec struct {
 	// Snapshot names and retention buckets are always UTC.
 	// +optional
 	TimeZone string `json:"timeZone,omitempty"`
-	Source   Source `json:"source"`
+	// Engine selects the backup engine. restic deduplicates changed files into chunks but makes the store
+	// folder unreadable without the restic binary; snapshots writes plain folders you can browse.
+	// restic requires source.type files.
+	// +kubebuilder:validation:Enum=snapshots;restic
+	// +kubebuilder:default=snapshots
+	// +optional
+	Engine Engine `json:"engine,omitempty"`
+	Source Source `json:"source"`
 	// Retention overrides the store default.
 	// +optional
 	Retention *Retention `json:"retention,omitempty"`

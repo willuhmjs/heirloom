@@ -66,6 +66,16 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              engine:
+                default: snapshots
+                description: |-
+                  Engine selects the backup engine. restic deduplicates changed files into chunks but makes the store
+                  folder unreadable without the restic binary; snapshots writes plain folders you can browse.
+                  restic requires source.type files.
+                enum:
+                - snapshots
+                - restic
+                type: string
               minSourcePercent:
                 default: 50
                 description: |-
@@ -435,6 +445,9 @@ spec:
             - source
             - storeRef
             type: object
+            x-kubernetes-validations:
+            - message: engine restic only supports source.type files
+              rule: self.engine != 'restic' || self.source.type == 'files'
           status:
             properties:
               conditions:
