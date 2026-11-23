@@ -208,6 +208,9 @@ excludes.
 Notable `BackupPolicy` fields: `timeZone` (IANA zone the schedules run in, default UTC), `minSourcePercent`
 (default 50, 0 disables; see Failure modes), `activeDeadlineSeconds` (default 3600), `trigger.manual`,
 `pod.{resources,nodeSelector,tolerations,priorityClassName,imagePullSecrets,scratchStorageClassName,scratchSize}`.
+`pod.resources` has no controller default; a measured guide for `limits.memory`: backups of large file trees
+peak around 300 Mi (restic's packer buffers grow with sustained throughput), restores and database dumps are
+far cheaper (~70 Mi), and leaving the limit unset simply runs best-effort.
 `pod.scratchStorageClassName` affects **every** mover pod, not just verify: restic keeps its chunk cache on
 `/scratch` (falling back to `--no-cache` when there is no scratch dir), sqlite and postgres restores stage
 their payloads through scratch, and the throwaway postgres data dir lives there. Its size is
