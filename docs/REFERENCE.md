@@ -335,7 +335,7 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
   protected either.
 - The `subPath` mount makes kubelet create `<namespace>/<policy>` on the export the first time, as root, so
   the export needs `no_root_squash` (already required for ownership). A verify or restore for a policy that
-  has never run a backup fails to start, because the read-only mount cannot create the directory.
+  has never run a backup fails cleanly: its restic repository does not exist yet.
 - CRDs in `charts/backshots/crds` install on first `helm install` only. On upgrade, run
   `kubectl apply -f charts/backshots/crds/`.
 - Block-level or application-consistent snapshots of arbitrary workloads are out of scope. Files are
