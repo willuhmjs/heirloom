@@ -125,7 +125,7 @@ func TestRestoreHappyPath(t *testing.T) {
 	if *job.Spec.BackoffLimit != 0 || job.Labels[jobcfg.LabelRole] != "restore" || metav1.GetControllerOf(&job).Name != "r1" {
 		t.Errorf("job = %+v", job.ObjectMeta)
 	}
-	if !pod.Volumes[1].NFS.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ClaimName != "app-data" {
+	if pod.Volumes[1].NFS.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ClaimName != "app-data" {
 		t.Errorf("volumes = %+v", pod.Volumes)
 	}
 	if vol := volume(pod, "scratch"); vol == nil || vol.EmptyDir == nil || mount(pod.Containers[0], "scratch").MountPath != "/scratch" {

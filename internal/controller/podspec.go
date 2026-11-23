@@ -38,7 +38,9 @@ type moverPod struct {
 	sourcePVC string
 }
 
-func (m moverPod) readOnlyStore() bool { return m.mode != jobcfg.ModeBackup }
+// The store is always mounted writable, even for verify and restore: restic writes repository locks
+// even for pure read commands, so a read-only mount makes `restic snapshots` retry a lock Save
+// forever. The isolation boundary is a mover only ever mounting its own policy folder of the export.
 
 // needsScratch: every mover run mounts the scratch volume. The runner points restic's chunk cache
 // (--cache-dir) at it so a large cache never lands on the node's root disk; restores and verifies of
@@ -138,7 +140,7 @@ func (m moverPod) moverContainer(encodedConfig string) corev1.Container {
 		// Scoped to this policy's directory: the user-chosen postgres image and symlinks planted in a PVC
 		// must not be able to reach other namespaces' backups.
 		{
-			Name: volStore, MountPath: jobcfg.StoreMount, ReadOnly: m.readOnlyStore(),
+			Name: volStore, MountPath: jobcfg.StoreMount,
 			SubPath: jobcfg.StoreSubPath(m.namespace, m.policy),
 		},
 	}
@@ -174,9 +176,8 @@ func (m moverPod) volumes() []corev1.Volume {
 	vols := []corev1.Volume{
 		{Name: volTools, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: volStore, VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{
-			Server:   m.store.Spec.NFS.Server,
-			Path:     m.store.Spec.NFS.Path,
-			ReadOnly: m.readOnlyStore(),
+			Server: m.store.Spec.NFS.Server,
+			Path:   m.store.Spec.NFS.Path,
 		}}},
 	}
 	if c := m.claim(); c != "" {

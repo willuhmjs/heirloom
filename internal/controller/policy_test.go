@@ -234,8 +234,8 @@ func TestVerifyJobScheduling(t *testing.T) {
 		t.Errorf("verify job = %+v", v.ObjectMeta)
 	}
 	pod := v.Spec.Template.Spec
-	if !pod.Volumes[1].NFS.ReadOnly || !mount(pod.Containers[0], "store").ReadOnly {
-		t.Error("verify store must be read-only")
+	if pod.Volumes[1].NFS.ReadOnly || mount(pod.Containers[0], "store").ReadOnly {
+		t.Error("store must stay writable for verify: restic writes repo locks even for read-only commands")
 	}
 	scratch := volume(pod, "scratch")
 	if scratch == nil || scratch.Ephemeral == nil || *scratch.Ephemeral.VolumeClaimTemplate.Spec.StorageClassName != "fast" ||
