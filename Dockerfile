@@ -12,8 +12,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /backshots ./cmd
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
-# rsync and sqlite are what the movers shell out to. No ssh: data only travels over NFS mounts.
-RUN apk add --no-cache rsync sqlite ca-certificates
+# rsync and sqlite are what the movers shell out to, restic is the optional deduplicating engine.
+# No ssh: data only travels over NFS mounts.
+RUN apk add --no-cache rsync sqlite ca-certificates restic
+# The runner passes --insecure-no-password to every restic command (needs restic >= 0.17), so fail the build
+# here rather than every restic backup run at once. Also proves the binary is functional, not just installed.
+RUN restic version && restic --insecure-no-password --repo /tmp/restic-probe init && rm -rf /tmp/restic-probe
 COPY --from=build /backshots /backshots
 # The image runs as root on purpose. Mover pods must preserve file ownership (chown) and read
 # arbitrary PVC contents, which needs root. The manager Deployment does not need that: the chart
