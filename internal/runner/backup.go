@@ -16,6 +16,9 @@ import (
 )
 
 func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
+	if r.cfg.Spec.Engine == v1alpha1.EngineRestic {
+		return r.backupRestic(ctx, res)
+	}
 	now := r.now().UTC()
 	name := snapshot.Name(now)
 	inc := filepath.Join(r.policyDir, snapshot.IncompletePrefix+name)
@@ -127,29 +130,40 @@ func (r *runner) resumePartial(inc string) error {
 	return os.Rename(filepath.Join(r.policyDir, newest), inc)
 }
 
-func (r *runner) captureFiles(ctx context.Context, inc string, st *snapshot.Status) error {
-	fs := r.cfg.Spec.Source.Files
-	if fs == nil {
-		return fmt.Errorf("source.files is not set")
-	}
+// sourceRoot is the directory the files engine backs up: the volume root, or the policy's subPath inside it,
+// resolved with containment so a planted symlink cannot point the backup (or a restore) outside the volume.
+func (r *runner) sourceRoot() (string, error) {
 	src := r.source
-	if fs.SubPath != "" && fs.SubPath != "." && fs.SubPath != "/" {
+	fs := r.cfg.Spec.Source.Files
+	if fs != nil && fs.SubPath != "" && fs.SubPath != "." && fs.SubPath != "/" {
 		sub, err := cleanRel(fs.SubPath)
 		if err != nil {
-			return fmt.Errorf("subPath: %w", err)
+			return "", fmt.Errorf("subPath: %w", err)
 		}
 		if src, err = resolveWithin(r.source, sub); err != nil {
-			return fmt.Errorf("subPath: %w", err)
+			return "", fmt.Errorf("subPath: %w", err)
 		}
 		if info, err := os.Stat(src); err != nil || !info.IsDir() {
-			return fmt.Errorf("subPath %q is not a directory in the volume", sub)
+			return "", fmt.Errorf("subPath %q is not a directory in the volume", sub)
 		}
+	}
+	return src, nil
+}
+
+func (r *runner) captureFiles(ctx context.Context, inc string, st *snapshot.Status) error {
+	if r.cfg.Spec.Source.Files == nil {
+		return fmt.Errorf("source.files is not set")
+	}
+	src, err := r.sourceRoot()
+	if err != nil {
+		return err
 	}
 	dst := filepath.Join(inc, "data")
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
 
+	fs := r.cfg.Spec.Source.Files
 	args := []string{rsyncFlags(fs.SkipACLsAndXattrs), "-S", "--no-D", "--numeric-ids", "--delete"}
 	for _, e := range fs.Exclude {
 		args = append(args, "--exclude="+e)

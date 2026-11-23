@@ -122,6 +122,8 @@ type proc struct {
 	env   []string
 	stdin io.Reader
 	cred  *syscall.Credential
+	// dir is the working directory the command starts in.
+	dir string
 }
 
 // execCommand is the single place external binaries are started.
@@ -131,6 +133,7 @@ func command(ctx context.Context, p proc, name string, args ...string) *exec.Cmd
 	cmd := execCommand(ctx, name, args...)
 	cmd.Env = p.env
 	cmd.Stdin = p.stdin
+	cmd.Dir = p.dir
 	if p.cred != nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: p.cred}
 	}
