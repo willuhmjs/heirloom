@@ -1,0 +1,39 @@
+name: Bug report
+description: Something did not work, or a backup or restore did the wrong thing
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If a backup is missing or a restore damaged data, please say so up front. Security problems go to
+        **Security > Report a vulnerability**, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: policy
+    attributes:
+      label: The BackupPolicy / Restore involved
+      description: Remove passwords. `kubectl get bp <name> -o yaml` (including `status`) is the most useful thing here.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The mover Job's logs (`kubectl logs job/<name>`), and the manager's if relevant.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: backshots version and Kubernetes version
+      placeholder: "0.1.0, k3s v1.35"
+    validations:
+      required: true
+  - type: input
+    id: nas
+    attributes:
+      label: NFS server
+      placeholder: "Synology DSM 7.2, TrueNAS, Linux nfsd, ..."

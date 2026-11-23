@@ -1,0 +1,42 @@
+image:
+  repository: ghcr.io/willuhmjs/backshots
+  # Defaults to the chart appVersion. Also used as the mover (runner) image via BACKSHOTS_IMAGE.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+podAnnotations: {}
+
+leaderElection: true
+
+# Metrics are served over TLS and require an authenticated, authorized caller. Bind the ClusterRole
+# <release>-metrics-reader to whatever scrapes them (the ServiceMonitor below uses Prometheus's token).
+metrics:
+  secure: true
+
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  labels: {}
+
+# Optionally render a default cluster-scoped BackupStore.
+store:
+  create: false
+  name: default
+  nfs:
+    server: ""
+    path: ""
+  # Defaults when omitted: hourly=24 daily=30 weekly=12 monthly=24
+  retention: {}

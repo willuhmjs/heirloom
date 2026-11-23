@@ -1,0 +1,11 @@
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata:
+  name: gitea-data-restore
+  namespace: gitea
+spec:
+  policyRef: gitea-data
+  from: latest
+  delete: true          # remove files not in the snapshot
+  scaleDown:
+    - {kind: Deployment, name: gitea}

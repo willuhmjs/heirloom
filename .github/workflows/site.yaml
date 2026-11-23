@@ -1,0 +1,28 @@
+name: site
+# Publishes the landing page to GitHub Pages when it changes. The Helm repository index.yaml lives on the same
+# branch and is maintained by the release workflow; this never touches it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/site/**
+      - docs/assets/logo.svg
+      - scripts/publish-site.sh
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: pages-branch
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # pushes to gh-pages
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - run: scripts/publish-site.sh "Update site"

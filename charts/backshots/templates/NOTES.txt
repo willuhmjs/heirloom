@@ -1,0 +1,34 @@
+backshots {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+CRDs in crds/ are installed only on first install. After upgrading to a version with API
+changes, apply them by hand:  kubectl apply -f charts/backshots/crds/
+
+{{- if .Values.store.create }}
+
+BackupStore "{{ .Values.store.name }}" points at {{ .Values.store.nfs.server }}:{{ .Values.store.nfs.path }}.
+{{- else }}
+
+No BackupStore was created. Create one (cluster-scoped), e.g.:
+
+  apiVersion: backshots.io/v1alpha1
+  kind: BackupStore
+  metadata: {name: default}
+  spec:
+    nfs: {server: 192.168.1.5, path: /volume1/k8s-backup}
+{{- end }}
+
+Apply your first BackupPolicy (in the namespace of the PVC):
+
+  kubectl apply -f - <<YAML
+  apiVersion: backshots.io/v1alpha1
+  kind: BackupPolicy
+  metadata: {name: myapp-files, namespace: myapp}
+  spec:
+    storeRef: {{ .Values.store.name }}
+    schedule: "5 * * * *"
+    source:
+      type: files
+      files: {pvc: myapp-data}
+  YAML
+
+  kubectl get bp -A

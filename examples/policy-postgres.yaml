@@ -1,0 +1,28 @@
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata:
+  name: gitea-db
+  namespace: gitea
+spec:
+  storeRef: default
+  schedule: "17 */6 * * *"
+  source:
+    type: postgres
+    postgres:
+      image: postgres:16        # must match the server major version
+      host: postgres.gitea.svc.cluster.local
+      user: postgres
+      passwordSecretRef:
+        name: postgres-credentials
+        key: password
+      databases: [gitea]        # empty = every non-template database
+  verify:
+    schedule: "40 4 * * 0"      # weekly: restore the latest dump into a scratch cluster
+    sql:
+      - SELECT count(*) > 100 FROM repository
+      - SELECT count(*) >= 1 FROM "user"
+  retention:
+    hourly: 0
+    daily: 14
+    weekly: 8
+    monthly: 12

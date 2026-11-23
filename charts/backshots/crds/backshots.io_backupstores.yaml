@@ -1,0 +1,99 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: backupstores.backshots.io
+spec:
+  group: backshots.io
+  names:
+    kind: BackupStore
+    listKind: BackupStoreList
+    plural: backupstores
+    singular: backupstore
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nfs.server
+      name: Server
+      type: string
+    - jsonPath: .spec.nfs.path
+      name: Path
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BackupStoreSpec describes where backups live.
+            properties:
+              nfs:
+                description: NFSSpec points at an NFS export that receives the snapshots
+                  as plain files.
+                properties:
+                  path:
+                    description: Path of the export, e.g. /volume1/k8s-backup.
+                    pattern: ^/.*
+                    type: string
+                  server:
+                    minLength: 1
+                    type: string
+                required:
+                - path
+                - server
+                type: object
+              retention:
+                description: |-
+                  Retention applied to policies that do not set their own.
+                  Defaults to hourly=24 daily=30 weekly=12 monthly=24.
+                properties:
+                  daily:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  hourly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  monthly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  weekly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: 'set at least one of hourly, daily, weekly, monthly (hourly:
+                    1 keeps only the newest snapshot)'
+                  rule: '(has(self.hourly) ? self.hourly : 0) + (has(self.daily) ?
+                    self.daily : 0) + (has(self.weekly) ? self.weekly : 0) + (has(self.monthly)
+                    ? self.monthly : 0) > 0'
+            required:
+            - nfs
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

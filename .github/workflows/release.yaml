@@ -1,0 +1,115 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+# No permissions by default; each job asks for exactly what it needs.
+permissions: {}
+jobs:
+  verify:
+    # A tag only publishes if it points at a commit on main and the tests pass on it.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - run: helm lint charts/backshots
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless signing with cosign
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Sign the image digest
+        env:
+          # Passed through the environment, never interpolated into the script.
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: echo "$TAGS" | xargs -I{} cosign sign --yes "{}@${DIGEST}"
+  chart:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - name: Package and push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm package charts/backshots --version "$VERSION" --app-version "$VERSION"
+          helm push "backshots-${VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts"
+  helm-repo:
+    # The Helm repository served at https://<owner>.github.io/<repo>:
+    #   helm repo add backshots https://willuhmjs.github.io/backshots
+    # chart-releaser attaches the packaged chart to a GitHub release and keeps index.yaml on the gh-pages branch.
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # creates the chart's GitHub release and pushes to gh-pages
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Git identity
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - name: Landing page (also creates gh-pages the first time)
+        run: scripts/publish-site.sh "Site for $GITHUB_REF_NAME"
+      - name: Package the chart at the tag's version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p .cr-release-packages
+          helm package charts/backshots --version "$VERSION" --app-version "$VERSION" --destination .cr-release-packages
+      - uses: helm/chart-releaser-action@92c6b97fa9f664492a2592e0d1d80bc6bf378957 # v1.9.0
+        with:
+          charts_dir: charts
+          skip_packaging: true
+          skip_existing: true
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

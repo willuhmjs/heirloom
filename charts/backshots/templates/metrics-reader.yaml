@@ -1,0 +1,13 @@
+{{- if .Values.metrics.secure }}
+# Grants read access to /metrics. Bind it to the ServiceAccount of whatever scrapes the manager, for example:
+#   kubectl create clusterrolebinding prom-backshots --clusterrole={{ include "backshots.fullname" . }}-metrics-reader --serviceaccount=monitoring:prometheus-k8s
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "backshots.fullname" . }}-metrics-reader
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
+{{- end }}

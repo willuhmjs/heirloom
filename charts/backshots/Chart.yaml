@@ -1,0 +1,66 @@
+apiVersion: v2
+name: backshots
+description: Kubernetes-native backups that land as plain files on your NAS. App-consistent Postgres and SQLite dumps, hardlink snapshots with GFS retention, restores that are tested.
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+kubeVersion: ">=1.29.0-0"
+home: https://willuhmjs.github.io/backshots/
+icon: https://raw.githubusercontent.com/willuhmjs/backshots/main/docs/assets/logo.svg
+sources:
+  - https://github.com/willuhmjs/backshots
+keywords:
+  - backup
+  - restore
+  - nfs
+  - postgres
+  - sqlite
+  - snapshots
+  - operator
+  - gitops
+maintainers:
+  - name: William Faircloth
+    url: https://github.com/willuhmjs
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: storage
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/crds: |
+    - kind: BackupStore
+      version: v1alpha1
+      name: backupstores.backshots.io
+      displayName: Backup store
+      description: The NFS export that receives the backups.
+    - kind: BackupPolicy
+      version: v1alpha1
+      name: backuppolicies.backshots.io
+      displayName: Backup policy
+      description: What to back up (files, SQLite, Postgres), when, and how long to keep it.
+    - kind: Restore
+      version: v1alpha1
+      name: restores.backshots.io
+      displayName: Restore
+      description: Restore a policy's data from a snapshot.
+  artifacthub.io/crdsExamples: |
+    - apiVersion: backshots.io/v1alpha1
+      kind: BackupPolicy
+      metadata:
+        name: gitea-db
+        namespace: gitea
+      spec:
+        storeRef: nas
+        schedule: "0 * * * *"
+        source:
+          type: postgres
+          postgres:
+            image: postgres:16
+            host: postgres.gitea.svc
+            passwordSecretRef: {name: postgres, key: password}
+  artifacthub.io/images: |
+    - name: backshots
+      image: ghcr.io/willuhmjs/backshots:0.1.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://github.com/willuhmjs/backshots/blob/main/docs/REFERENCE.md
+    - name: Restore runbooks
+      url: https://github.com/willuhmjs/backshots/blob/main/docs/RESTORE-RUNBOOKS.md

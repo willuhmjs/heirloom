@@ -1,0 +1,10 @@
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata:
+  name: gitea-one-repo
+  namespace: gitea
+spec:
+  policyRef: gitea-data
+  from: latest
+  paths:
+    - repositories/will/homelab.git

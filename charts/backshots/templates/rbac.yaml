@@ -1,0 +1,94 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "backshots.fullname" . }}
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [backshots.io]
+    resources: [backupstores, backuppolicies, restores]
+    verbs: [get, list, watch]
+  - apiGroups: [backshots.io]
+    resources: [backuppolicies/status, restores/status]
+    verbs: [get, update]
+  # A Restore carries a finalizer so that deleting it mid-flight puts scaled-down workloads back (metadata update).
+  - apiGroups: [backshots.io]
+    resources: [restores]
+    verbs: [update]
+  # Jobs are owned by their policy or restore with blockOwnerDeletion, which needs this where the
+  # OwnerReferencesPermissionEnforcement admission plugin is on.
+  - apiGroups: [backshots.io]
+    resources: [backuppolicies/finalizers, restores/finalizers]
+    verbs: [update]
+  # A restore checks that the claim it writes to exists before it stops any workload (uncached get only).
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  # Secure metrics: authenticate the caller's token and authorize it for /metrics.
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+  # Events on health changes and restore progress, visible in kubectl describe.
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  # The controller schedules runs itself: it creates one Job per due run and prunes old finished Jobs.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  # Restore scales workloads down and up; read uncached with get, changed with a merge patch of replicas and annotations.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "backshots.fullname" . }}
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "backshots.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "backshots.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "backshots.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "backshots.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "backshots.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "backshots.fullname" . }}
+    namespace: {{ .Release.Namespace }}

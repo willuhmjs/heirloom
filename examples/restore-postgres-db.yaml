@@ -1,0 +1,12 @@
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata:
+  name: gitea-db-restore
+  namespace: gitea
+spec:
+  policyRef: gitea-db
+  from: latest
+  databases: [gitea]
+  scaleDown:               # the apps using the database, not postgres itself
+    - {kind: Deployment, name: gitea}
+  scaleUpOnFailure: false

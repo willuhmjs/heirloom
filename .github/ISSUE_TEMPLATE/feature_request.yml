@@ -1,0 +1,19 @@
+name: Feature request
+description: An idea, a new source type, a rough edge
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        backshots keeps snapshots as plain, browsable files on NFS. Ideas that fit that are very welcome; ideas that
+        need a repository format or encryption are probably out of scope (see CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?

@@ -1,0 +1,23 @@
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata:
+  name: gitea-data
+  namespace: gitea
+spec:
+  storeRef: default
+  schedule: "30 2 * * *"
+  source:
+    type: files
+    files:
+      pvc: gitea-data
+      subPath: git
+      exclude:
+        - "*.tmp"
+        - "/cache/"
+        - "/log/"
+  minSourcePercent: 50   # abort if the volume has under half the previous snapshot's file count
+  activeDeadlineSeconds: 7200
+  pod:
+    resources:
+      limits:
+        memory: 512Mi

@@ -1,0 +1,14 @@
+# Synology-style NFS export. Squash must be "No mapping" so root can write and chown.
+apiVersion: backshots.io/v1alpha1
+kind: BackupStore
+metadata:
+  name: default
+spec:
+  nfs:
+    server: 192.168.1.5
+    path: /volume1/k8s-backup
+  retention:
+    hourly: 24
+    daily: 30
+    weekly: 12
+    monthly: 24

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>backshots: Kubernetes-native backups that land as plain files on your NAS</title>
+<meta name="description" content="A small Kubernetes operator that backs up your volumes and databases to an NFS share as plain, browsable files. App-consistent Postgres and SQLite, hardlink snapshots, retention, and restore tests built in.">
+<link rel="icon" href="logo.svg">
+<style>
+  :root{--bg:#0b1220;--panel:#111c33;--line:#1e3357;--text:#e2e8f0;--mute:#94a3b8;--a:#2dd4bf;--b:#60a5fa}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  a{color:var(--b)}
+  .wrap{max-width:980px;margin:0 auto;padding:0 24px}
+  header{padding:72px 0 40px;background:radial-gradient(900px 400px at 20% -10%,#17305a55,transparent)}
+  .brand{display:flex;align-items:center;gap:20px}
+  .brand img{width:84px;height:84px;border-radius:20px}
+  h1{font-size:56px;line-height:1;margin:0;letter-spacing:-1.5px}
+  .tag{font-size:23px;color:#cbd5e1;margin:22px 0 0;max-width:640px}
+  .pills{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:6px 16px;font-size:15px;font-weight:600}
+  .pill:nth-child(1){color:#5eead4;border-color:#2dd4bf88}.pill:nth-child(2){color:#93c5fd;border-color:#60a5fa88}.pill:nth-child(3){color:#c7d2fe;border-color:#a5b4fc88}
+  section{padding:34px 0}
+  h2{font-size:28px;margin:0 0 14px;letter-spacing:-.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--mute);font-size:15.5px}
+  pre{background:#08101e;border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow:auto;font:14.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;position:relative}
+  .copy{position:absolute;top:10px;right:10px;background:var(--line);color:var(--text);border:0;border-radius:8px;padding:4px 10px;cursor:pointer;font-size:13px}
+  .cm{color:#64748b}.k{color:#5eead4}.s{color:#fbbf24}
+  .tree{color:#cbd5e1}
+  footer{padding:40px 0 70px;color:var(--mute);font-size:15px;border-top:1px solid var(--line);margin-top:30px}
+  .btns{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 20px;border-radius:10px;font-weight:700;text-decoration:none}
+  .btn.p{background:linear-gradient(135deg,#2dd4bf,#60a5fa);color:#06101c}.btn.s{border:1px solid var(--line);color:var(--text)}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="brand"><img src="logo.svg" alt=""><h1>backshots</h1></div>
+  <p class="tag">Kubernetes-native backups that land as plain files on your NAS. Browse them, copy them, restore them. No keys, no S3, no special tooling.</p>
+  <div class="pills"><span class="pill">plain files, no keys</span><span class="pill">app-consistent databases</span><span class="pill">restores that are tested</span></div>
+  <div class="btns"><a class="btn p" href="#install">Install with Helm</a><a class="btn s" href="https://github.com/willuhmjs/backshots">GitHub</a><a class="btn s" href="https://github.com/willuhmjs/backshots/blob/main/docs/REFERENCE.md">Docs</a></div>
+</div></header>
+
+<main class="wrap">
+<section id="install">
+  <h2>Install</h2>
+<pre><button class="copy" onclick="cp(this)">copy</button><span class="cm"># add the chart repository</span>
+helm repo add backshots https://willuhmjs.github.io/backshots
+helm repo update
+
+<span class="cm"># install the operator and point it at your NFS export</span>
+helm install backshots backshots/backshots -n backshots-system --create-namespace \
+  --set store.create=true \
+  --set store.nfs.server=192.168.1.5 \
+  --set store.nfs.path=/volume1/k8s-backup</pre>
+</section>
+
+<section>
+  <h2>Back up an app in one manifest</h2>
+<pre><button class="copy" onclick="cp(this)">copy</button><span class="k">apiVersion</span>: backshots.io/v1alpha1
+<span class="k">kind</span>: BackupPolicy
+<span class="k">metadata</span>: {name: gitea-db, namespace: gitea}
+<span class="k">spec</span>:
+  <span class="k">storeRef</span>: default
+  <span class="k">schedule</span>: <span class="s">"0 * * * *"</span>            <span class="cm"># hourly</span>
+  <span class="k">source</span>:
+    <span class="k">type</span>: postgres
+    <span class="k">postgres</span>:
+      <span class="k">image</span>: postgres:16            <span class="cm"># pg_dump always matches your server</span>
+      <span class="k">host</span>: postgres.gitea.svc
+      <span class="k">passwordSecretRef</span>: {name: postgres, key: password}
+  <span class="k">verify</span>:                          <span class="cm"># restore it somewhere safe, prove it works</span>
+    <span class="k">schedule</span>: <span class="s">"0 4 * * 0"</span>
+    <span class="k">database</span>: gitea
+    <span class="k">sql</span>: [<span class="s">"select count(*) &gt; 100 from repository"</span>]</pre>
+<pre class="tree"><span class="cm">$ kubectl get backuppolicies -A      # example output</span>
+NAMESPACE   NAME        TYPE       SCHEDULE    LAST   SNAPSHOTS   VERIFIED   HEALTHY
+gitea       gitea-db    postgres   0 * * * *   4m     26          true       True
+gitea       gitea-data  files      0 3 * * *   9h     14          true       True</pre>
+</section>
+
+<section>
+  <h2>What you get on the NAS</h2>
+<pre class="tree">gitea/gitea-db/2026-11-22T10-00-00Z/postgres/gitea.sql.gz   <span class="cm"># plain SQL: zcat | psql</span>
+gitea/gitea-db/2026-11-22T10-00-00Z/postgres/globals.sql.gz <span class="cm"># roles</span>
+gitea/gitea-data/2026-11-22T03-00-00Z/data/...               <span class="cm"># a normal directory tree</span></pre>
+  <p>Every folder is a complete snapshot. Unchanged files are hardlinked, so history is cheap. If the operator
+  vanished tomorrow you would still restore with <code>cp</code> and <code>psql</code>.</p>
+</section>
+
+<section>
+  <h2>Why it is different</h2>
+  <div class="grid">
+    <div class="card"><h3>Plain files</h3><p>No repository format, no encryption keys, no object store to run. The backup is the thing you can open in your file manager.</p></div>
+    <div class="card"><h3>Consistent databases</h3><p>pg_dump and SQLite's online backup, run in your own database image so versions always match. Not a hot copy of data files.</p></div>
+    <div class="card"><h3>Proven restorable</h3><p>Verify jobs restore the latest snapshot into a scratch database and run your SQL assertions. A backup you never restored is a guess.</p></div>
+    <div class="card"><h3>Restores you can kubectl</h3><p>Apply a Restore. It checks inputs first, stops your app, restores, starts it again, and undoes itself if you delete it halfway.</p></div>
+    <div class="card"><h3>Built-in retention</h3><p>Hourly, daily, weekly and monthly counts per policy, pruned atomically. A snapshot only appears once it is complete.</p></div>
+    <div class="card"><h3>Small and honest</h3><p>One small controller. Tenant isolation on the share, authenticated metrics, health you can alert on. Alpha software, tested end to end.</p></div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap">backshots is Apache-2.0 licensed. <a href="https://github.com/willuhmjs/backshots">github.com/willuhmjs/backshots</a> ·
+<a href="index.yaml">Helm repository index</a> · API <code>backshots.io/v1alpha1</code></div></footer>
+<script>function cp(b){var t=b.parentNode.innerText.replace(/^copy\n?/,'');navigator.clipboard.writeText(t);b.textContent='copied';setTimeout(function(){b.textContent='copy'},1400)}</script>
+</body>
+</html>

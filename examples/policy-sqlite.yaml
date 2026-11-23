@@ -1,0 +1,14 @@
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata:
+  name: vaultwarden-db
+  namespace: vaultwarden
+spec:
+  storeRef: default
+  schedule: "3 * * * *"
+  source:
+    type: sqlite
+    sqlite:
+      pvc: vaultwarden-data
+      paths:
+        - db.sqlite3

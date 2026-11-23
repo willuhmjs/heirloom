@@ -1,0 +1,17 @@
+{{- if .Values.store.create }}
+
+apiVersion: backshots.io/v1alpha1
+kind: BackupStore
+metadata:
+  name: {{ .Values.store.name }}
+  labels:
+    {{- include "backshots.labels" . | nindent 4 }}
+spec:
+  nfs:
+    server: {{ required "store.nfs.server is required when store.create=true" .Values.store.nfs.server | quote }}
+    path: {{ required "store.nfs.path is required when store.create=true" .Values.store.nfs.path | quote }}
+  {{- with .Values.store.retention }}
+  retention:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

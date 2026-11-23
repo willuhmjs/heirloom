@@ -1,0 +1,16 @@
+# Change spec.trigger.manual to any new string to start one backup now.
+# status.lastManualSync is set to it when that run succeeds.
+#   kubectl patch bp gitea-data -n gitea --type merge -p '{"spec":{"trigger":{"manual":"before-upgrade-1"}}}'
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata:
+  name: gitea-data
+  namespace: gitea
+spec:
+  storeRef: default
+  schedule: "30 2 * * *"
+  source:
+    type: files
+    files: {pvc: gitea-data}
+  trigger:
+    manual: before-upgrade-1
