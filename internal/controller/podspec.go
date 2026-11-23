@@ -116,9 +116,11 @@ func (m moverPod) installContainer() corev1.Container {
 			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		// Namespaces with a ResourceQuota that demands requests and limits would otherwise reject the pod.
+		// The limit has room because the container is itself a large static binary (the operator's, and now
+		// restic's too, both mmapped and both counted against the cgroup), not because the copy needs it.
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi")},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("192Mi")},
 		},
 	}
 }
