@@ -1,0 +1,37 @@
+# Dump any database from inside its own pod. The mover execs the command over the API using the
+# scoped backshots-executor identity the controller maintains in this namespace (pods get/list and
+# pods/exec create, nothing else), and gzip's its stdout into command/all-databases.sql.gz.
+# podSelector must match exactly one Running, ready pod.
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata:
+  name: mysql
+  namespace: mysql
+spec:
+  storeRef: default
+  schedule: "17 4 * * *"     # odd minute: jitter is per-policy and spreads a fleet off the top of the hour
+  jitter: 15m
+  source:
+    type: command
+    command:
+      podSelector: {app: mysql}
+      container: mysql        # optional; the first container when omitted
+      command: ["sh", "-c", "mysqldump --all-databases --single-transaction"]
+      file: all-databases.sql.gz
+      preCommand: ["mysql", "-e", "FLUSH TABLES WITH READ LOCK"]    # must exit 0 before the dump starts
+      postCommand: ["mysql", "-e", "UNLOCK TABLES"]                 # runs no matter how the dump ended
+---
+# Restoring has no universal loader: the dumps are written onto targetPVC under command/, and the
+# app's own import tool takes them from there.
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata:
+  name: mysql-restore
+  namespace: mysql
+spec:
+  policyRef: mysql
+  from: latest
+  targetPVC: mysql-data
+  scaleDown:
+    - kind: StatefulSet
+      name: mysql

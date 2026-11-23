@@ -40,15 +40,19 @@ on the worst day of the year. The NFS export's ACL remains the security boundary
   fraction of the bytes it used to. The policy's status reports the bytes actually *added* after dedup, so you can
   watch it working.
 - **Databases done properly.** `pg_dump` and SQLite's online backup, not a hot copy of data files. The dump runs
-  inside *your own* Postgres image, so the client always matches the server version.
+  inside *your own* Postgres image, so the client always matches the server version. Anything else with a CLI dump
+  tool (MySQL, MongoDB, Redis) fits the `command` source: it `exec`'s your command in the app's pod and keeps its
+  output, with pre/post hooks to take and release a lock.
 - **A backup you have never restored is a guess.** Set a `verify` schedule and backshots restores the latest
   snapshot into a scratch database and runs your SQL assertions. The result is on the policy:
   `VERIFIED true`.
 - **Built for homelabs and small clusters.** One small controller, and the repository is a plain local restic repo
   on your own export — no rest-server, no object storage, no service to run. Retention (hourly, daily, weekly,
   monthly) is built in.
-- **Safe by default.** An empty or shrunken volume never overwrites a good history. Restores validate everything
-  *before* stopping your app, and undo themselves if you delete them halfway.
+- **Safe by default.** An empty or shrunken volume never overwrites a good history — a snapshot the guard rejects
+  is forgotten, so `latest` stays the last complete one. Restores validate everything
+  *before* stopping your app, wait for any backup in flight, pause autoscalers aimed at what they stop, and undo
+  themselves if you delete them halfway.
 
 ## Quickstart
 
@@ -105,7 +109,8 @@ gitea       gitea-data   files      0 3 * * *   9h     14          true       Tr
 Want a backup *now*? Set `spec.trigger.manual: "now-1"` and it runs once. More in [`examples/`](examples).
 
 Sources: **files** (`restic backup` from the volume root, subPath and excludes honored), **sqlite** (online backup
-plus an integrity check) and **postgres** (`pg_dump` per database plus `pg_dumpall` globals).
+plus an integrity check), **postgres** (`pg_dump` per database plus `pg_dumpall` globals) and **command** (any
+dump command `exec`'d in your app's pod — MySQL, MongoDB, Redis — with optional pre/post quiesce hooks).
 
 ## Restore
 
@@ -199,7 +204,7 @@ once you no longer need them. Backups are restic now, always — there is no tog
 | Backup format | restic repository on NFS (local backend) | restic or rclone repository | restic repository | Kopia/restic repository |
 | Needs an object store or server | no, an NFS share | restic/S3 or similar | S3 or similar | yes, S3-compatible |
 | Readable without the tool | no — needs the restic binary | no | no | no |
-| Database-consistent dumps | built in (Postgres, SQLite) | bring your own hook | pre-backup command | hooks |
+| Database-consistent dumps | built in (Postgres, SQLite) + any `exec`'d dump command | bring your own hook | pre-backup command | hooks |
 | Built-in restore testing | yes (`verify`) | no | no | no |
 | Backs up Kubernetes objects | no, use GitOps | no | no | yes, its main job |
 | Encryption | none, by design | yes | yes | yes |
@@ -240,11 +245,14 @@ with the restic binary.
 **Does it back up my Deployments, Secrets and CRDs?** No. Keep those in git (Flux, Argo CD) and back up the
 *data* here.
 
-**MySQL, MongoDB, ...?** Not yet. See below.
+**MySQL, MongoDB, ...?** Yes. The `command` source `exec`'s your dump tool (`mysqldump`, `mongodump`,
+`redis-cli`) in the app's own pod and stores its output; a restore writes the dumps onto a PVC for the app's
+import tool to load. It is not as integrated as the Postgres path (no dump-into-a-scratch-server verify), but
+the data is backed up and restorable.
 
 ## Ideas, not promises
 
-A generic "run this command and keep its output" source for MySQL, MongoDB and friends. A second copy to another
+A second copy to another
 share. Pull requests and issues are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Development

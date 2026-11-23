@@ -3,6 +3,53 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1alpha1` and may change between releases.
 
+## [Unreleased]
+
+### Added
+- **`command` source type**: a dump command is `exec`'d in a running app pod selected by label
+  (`podSelector`, optional `container`), and its stdout is gzipped into `command/<file>` inside the
+  snapshot — the same staging contract SQLite and Postgres follow, so retention and verify paths are
+  shared. Optional `preCommand`/`postCommand` quiesce hooks: the pre-command must exit 0 before the dump
+  starts, the post-command runs no matter how the dump ended, so a lock is never left held. The mover runs
+  as a scoped, controller-maintained `backshots-executor` ServiceAccount whose Role grants nothing but
+  pod lookup and `pods/exec`. A `Restore` of a command source requires `targetPVC`: the dumps are restored
+  onto that volume and the app's own import tool loads them.
+- **Scheduling jitter** (`spec.jitter`): every cron slot of a policy shifts by a fixed, per-policy hash
+  offset in `[0, jitter)`, so a fleet of policies scheduled `0 * * * *` does not stampede the NAS at the
+  same second. The offset is stable across reconciles and leader changes; Job names stay idempotent.
+- **NFS `mountOptions` on `BackupStore`**: a pod's inline NFS volume cannot carry mount options, so a store
+  that sets them gets a static PV + PVC pair provisioned per namespace (deterministic name, shared by the
+  namespace's policies, reclaim `Delete` — only the PV pointer is deleted, never the export) and movers
+  mount that claim. Changing the options of a bound PV surfaces as an actionable `Ready=False` message
+  instead of being silently ignored.
+- **HPA quiesce during restores**: a `Restore` pauses every `HorizontalPodAutoscaler` targeting its
+  `scaleDown` workloads — bounds are recorded in `status.scaledHPAs` before the autoscaler is touched, set
+  to 0, and restored on completion, including through the finalizer path when a Restore is deleted
+  mid-flight. Clusters before 1.30 whose API rejects a 0 bound get a warning event and keep autoscaling,
+  as before.
+- Chart: optional `replicas` (leader election is now on by default, and >1 enables a rolling update), an
+  optional `PodDisruptionBudget`, and **CRD hooks**: a pre-install/pre-upgrade hook Job running the
+  operator's own image applies the CRDs embedded in it (`backshots install-crds`), closing Helm's
+  "crds/ are installed once, never upgraded" gap. `crdHooks.enabled=false` opts out.
+
+### Changed
+- **Data safety:** a snapshot that restic committed but the shrink guard rejected is now `restic forget`-ed.
+  Before, it stayed the repository's newest, so `restore from: latest` after a guarded run would have
+  handed back the shrunken tree — and the next run would have compared against it and stayed silent.
+- **Data safety:** the restic repository is now a true mutex in both directions: a `Restore` waits for a
+  running backup or verify to finish before stopping workloads (the policy already paused while a Restore
+  ran, but a run already in flight used to race the restore, and `forget --prune` rewrites packs while the
+  restore reads them). Restore and verify also `restic unlock` the repository first, so a stale lock from
+  a killed run cannot hang a mover forever.
+- Mover pods get default **resource requests** (`cpu: 100m`, `memory: 512Mi`): a best-effort mover was the
+  first pod evicted under memory pressure, mid-backup. Limits stay unset unless you set them.
+- Leader election now defaults to **on** (`--leader-elect=true`); the chart still starts one replica.
+
+### Development
+- CI: unit tests run with `-race` and publish coverage, a `golangci-lint` job (v2 config) guards the tree,
+  and a new e2e workflow runs the full install against a kind cluster with an NFS server on every pull
+  request.
+
 ## [0.2.0] - 2026-11-23
 
 ### Changed

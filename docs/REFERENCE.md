@@ -25,7 +25,11 @@ For the overview and a five-minute start, see the [README](../README.md). Restor
 
 The manager is the scheduler. Each reconcile it checks whether a cron slot of a policy has passed since the
 last run and, if so, creates one Job (`bs-<policy>-run-<slot>`; verify runs are `bs-<policy>-verify-<slot>`).
-It never starts a second run while one is active, starts nothing while a `Restore` for the policy is running,
+Slots carry a policy's fixed `spec.jitter` offset (see CRD reference) so a fleet of policies on the same
+cron expression does not stampede the NAS at the same second.
+It never starts a second run while one is active, starts nothing while a `Restore` for the policy is running
+— and a `Restore` waits for an already-running backup or verify to finish, so nothing shares the repository
+while a restore rewrites a volume —
 prunes old finished Jobs (keeps 3 succeeded and 3 failed per role), and reads results back from pod
 termination messages. It never mounts the store. **If the manager is down, scheduled runs pause**; when it
 returns it runs a missed slot once, not once per missed slot, and a policy turns `Healthy=False/Stale` if
@@ -48,6 +52,7 @@ Source types:
 | `files` | `restic backup .` from the volume root (or the `subPath` root), excludes via restic `--exclude` |
 | `sqlite` | consistent copy per database with the SQLite online backup API, staged under `.staging` then committed into the repository |
 | `postgres` | `pg_dump` `.sql.gz` per database plus `globals.sql.gz`, staged under `.staging` then committed into the repository |
+| `command` | a dump command `exec`'d in a running app pod (matched by `podSelector`); its stdout is gzipped to `command/<file>` in the snapshot. Any database with a CLI dump tool (mysql, mongodump, redis) fits without backshots growing a driver for it |
 
 ## On-disk layout
 
@@ -142,8 +147,9 @@ latest snapshot restores:
 
 - always: `restic check`, plus `restic check --read-data-subset=N/10` where N rotates by ISO week, so the
   full pack data of the repository is read within ten weeks.
-- `files`: additionally restores the smallest sample files (up to 5, <= 4 MiB each) into scratch and
-  checksum-compares them against `restic dump`.
+- `files` and `command`: additionally restores the smallest sample files (up to 5, <= 4 MiB each) into
+  scratch and checksum-compares them against `restic dump` (for a command source that reads back the
+  `command/<file>` dump itself).
 - `sqlite`: additionally restores the snapshot to scratch and runs `PRAGMA integrity_check` on every
   database.
 - `postgres`: additionally loads the restored dumps into a throwaway postgres instance on scratch (fsync
@@ -181,6 +187,10 @@ What each type does:
   `-wal`/`-shm`/`-journal` files are removed.
 - `postgres`: `globals.sql.gz` plus the selected (or all) database dumps are loaded via `psql` — plain SQL
   made with `--create --clean --if-exists`; no `pg_restore`.
+- `command`: there is no universal loader for arbitrary dumps, so `targetPVC` (the volume the dumps are
+  written to) is required. The snapshot's `command/` entries are restored onto it via restic `--include`
+  (`paths` restricts which); the app's own import tool (`mysql`, `mongorestore`, `redis-cli --pipe`) takes
+  them from there. It does not `exec` into the app pod — a restore only writes files.
 
 With the CR: create a `Restore` next to the policy (see `examples/restore-*.yaml`) and watch
 `kubectl get restores -n <ns>`. It can scale Deployments and StatefulSets to zero first and back
@@ -190,8 +200,14 @@ PVC.
 What it does before it touches anything: it validates `from`, `paths`, `databases`, the name length and that
 every PVC it needs exists, and fails with a message if not, with your workloads still running. Restores of
 one policy run one at a time, oldest first (a later one shows `waiting for restore "<name>"`). While one runs
-the policy starts no backup. If the workloads do not stop within 5 minutes the restore fails and they are
-scaled back up, because nothing was restored. If the restore itself fails the workloads stay down unless
+the policy starts no backup, and a Restore whose policy has a backup or verify already running **waits for it
+to finish first** (it shows `waiting for "<job>" to finish before restoring`): a restore and a mover must
+never touch the same repository at once, because `forget --prune` rewrites pack files a restore is reading.
+If `scaleDown` names a workload that a `HorizontalPodAutoscaler` targets, that autoscaler is **quiesced** too:
+its `min`/`max` are recorded into `status.scaledHPAs` and set to 0 so it cannot scale the workload back up
+under the restore, then put back on completion. On clusters before 1.30 whose API rejects a 0 bound, the
+autoscaler is left running with a warning on the Restore instead of failing it.
+If the workloads do not stop within 5 minutes the restore fails and they are scaled back up, because nothing was restored. If the restore itself fails the workloads stay down unless
 `scaleUpOnFailure: true`, since the data may be half written. A `Restore` with `scaleDown` carries the
 finalizer `backshots.io/restore`: deleting it mid-flight puts the workloads back first. A files restore of a
 policy with `subPath` writes back into that subPath, and `delete: true` never removes paths the backup
@@ -201,14 +217,20 @@ excludes.
 
 | kind | scope | purpose |
 |---|---|---|
-| `BackupStore` | cluster | NFS server and path, default retention |
-| `BackupPolicy` (`bp`) | namespaced | storeRef, schedule, one source, retention, verify, trigger, suspend, pod options |
+| `BackupStore` | cluster | NFS server and path, optional NFS `mountOptions`, default retention |
+| `BackupPolicy` (`bp`) | namespaced | storeRef, schedule, jitter, one source, retention, verify, trigger, suspend, pod options |
 | `Restore` (`brs`) | namespaced | policyRef, from, targetPVC, paths, databases, delete, scaleDown |
 
-Notable `BackupPolicy` fields: `timeZone` (IANA zone the schedules run in, default UTC), `minSourcePercent`
+Notable `BackupPolicy` fields: `timeZone` (IANA zone the schedules run in, default UTC), `jitter` (a
+duration like `15m`; shifts every slot of the policy by a fixed per-policy hash offset in `[0, jitter)`, so
+many policies sharing `0 * * * *` do not all hit the NAS at :00. The offset is stable across runs and per
+role, so `bs-<policy>-run-<slot>` names stay idempotent; keep it well under the schedule interval, max 6h),
+`minSourcePercent`
 (default 50, 0 disables; see Failure modes), `activeDeadlineSeconds` (default 3600), `trigger.manual`,
 `pod.{resources,nodeSelector,tolerations,priorityClassName,imagePullSecrets,scratchStorageClassName,scratchSize}`.
-`pod.resources` has no controller default; a measured guide for `limits.memory`: backups of large file trees
+`pod.resources` defaults its **requests** to `cpu: 100m, memory: 512Mi` (a best-effort mover is the first
+pod evicted, and restic's index alone is a few hundred MiB); limits stay unset unless you set them. A
+measured guide for `limits.memory`: backups of large file trees
 peak around 300 Mi (restic's packer buffers grow with sustained throughput), restores and database dumps are
 far cheaper (~70 Mi), and leaving the limit unset simply runs best-effort.
 `pod.scratchStorageClassName` affects **every** mover pod, not just verify: restic keeps its chunk cache on
@@ -219,7 +241,21 @@ sqlite/postgres policies whose dumps are large, give `/scratch` a storage class.
 Source options: files `exclude` (passed to restic as `--exclude`). (`skipACLsAndXattrs` is gone: it was an
 rsync workaround; restic stores ACLs and extended attributes only where the filesystem has them, so it never
 failed the way rsync did); postgres `databases`, `excludeDatabases`, `globals` (`full`,
-`no-role-passwords` for a least-privilege backup role, or `skip`). Full schema: `config/crd/` or
+`no-role-passwords` for a least-privilege backup role, or `skip`); command `podSelector`, `container`,
+`command` (its stdout becomes the dump), `file` (the name inside `command/` in the snapshot), and the
+optional `preCommand`/`postCommand` quiesce hooks. A command mover runs as a scoped, namespace-local
+`backshots-executor` ServiceAccount the controller maintains only for command policies — its Role grants
+nothing but reading pods and `pods/exec`, nothing else. `preCommand` must exit 0 before the dump starts (the
+place to take a read lock); `postCommand` runs no matter how the dump ended, so a quiesce is always undone
+even if the run is cancelled or expires. The dump command must select exactly one Running, ready pod; if
+`podSelector` matches several, the run fails rather than guessing which to lock.
+`spec.nfs.mountOptions` on a `BackupStore` (for example `["nfsvers=4.1", "hard", "timeo=50"]`) is how a store
+pins the NFS mount knobs that decide NAS reliability. A pod's inline NFS volume cannot carry mount options,
+so a store that sets them instead gets a static PV + PVC pair provisioned per namespace (deterministic name,
+`persistentVolumeReclaimPolicy: Delete` — it deletes only the PV pointer, never the export), and movers mount
+that claim. Because `spec.mountOptions` is immutable on a bound PV, changing a live store's options shows up
+as `Ready=False/StoreClaimPending` telling you to `kubectl delete pv <name>` so the next run recreates it.
+Full schema: `config/crd/` or
 `kubectl explain backuppolicy.spec`. Specs are validated when applied (non-empty fields, `from` format —
 `latest` or a hex id of 8-64 chars, one source block matching `type`, name length, `delete` not combined
 with `paths`) and again by the controller.
@@ -267,7 +303,8 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 |---|---|
 | NAS down or unmountable | the mover pod waits in ContainerCreating (kubelet keeps retrying the mount, so it completes by itself once the NAS is back); the policy turns `Healthy=False/Stale` after one overdue run plus grace; nothing is lost on the NAS |
 | NAS full | restic or the dump fails, no snapshot is published, previous snapshots untouched, run reported failed; `.staging` is swept at the start of the next run |
-| source empty or recreated | run fails the guard: the run's snapshot file count is compared against the previous snapshot's (both from restic summaries), and 0 files or a shrink below `minSourcePercent` fails the run; restic itself also refuses to snapshot an empty tree |
+| source empty or recreated | run fails the guard: the run's snapshot file count is compared against the previous snapshot's (both from restic summaries), and 0 files or a shrink below `minSourcePercent` fails the run; restic itself also refuses to snapshot an empty tree. restic has committed the snapshot by the time the guard trips, so the runner `restic forget`s that rejected snapshot: history stays ending at the last good one and `from: latest` never hands back the shrunken tree (its freed packs are reclaimed by the next run's prune) |
+| repo lock left by a killed run | every restic read path (`restore`, `check`) unlocks the repository before starting, so a stale lock from a run that died mid-flight cannot make the next mover hang retrying a lock save forever |
 | run longer than the interval | no second run starts while one is active; the due slot runs as soon as it finishes (once), and `activeDeadlineSeconds` kills a stuck run |
 | operator down | a run already in progress finishes, but no new scheduled run starts and status stops updating; on return a missed slot runs once. Alert on `Stale` and on a missing or old `backshots_last_success_timestamp_seconds` |
 | crash mid-run | no snapshot is published (restic commits it only at the end); the transient `.staging` tree is swept at the start of the next run and packs the killed run uploaded are unreferenced and removed by the next `forget --prune` |

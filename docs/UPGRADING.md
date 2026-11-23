@@ -1,15 +1,17 @@
 # Upgrading
 
-## The CRDs are not upgraded by Helm
+## The CRDs are upgraded by the chart itself
 
-Helm installs the files in a chart's `crds/` directory on the first `helm install` and never changes them again.
-Before (or right after) `helm upgrade` to a release whose changelog mentions an API change, apply the new CRDs
-from that release yourself:
+Helm installs the files in a chart's `crds/` directory on the first `helm install` and never changes them
+again. The chart closes that gap: by default it runs a pre-install and pre-upgrade hook that applies the
+CRDs embedded in the operator image (`backshots install-crds`), so an upgrade can never leave the cluster on
+an old schema. It needs permission to manage `customresourcedefinitions`, which its own hook
+ClusterRole grants. Set `crdHooks.enabled=false` only if you apply CRDs yourself, and then apply the
+chart's `crds/` yourself before `helm upgrade` when the changelog mentions an API change:
 
 ```sh
 helm pull backshots/backshots --version <new-version> --untar
 kubectl apply --server-side --force-conflicts -f backshots/crds/
-helm upgrade backshots backshots/backshots -n backshots-system --version <new-version>
 ```
 
 `--server-side` is needed because the CRDs are large for client-side apply.

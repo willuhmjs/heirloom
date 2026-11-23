@@ -94,6 +94,23 @@ Roles come from `postgres/globals.sql.gz` (`gunzip -c ... | psql -h HOST -U post
 first on a fresh server and ignore "already exists" errors. Use a client whose major version is at least the
 server's.
 
+## One command-source dump (MySQL, MongoDB, ...)
+
+The snapshot holds the command's gzipped output at `command/<file>` (`rs ls latest` shows it). There is no
+universal loader, so the CR restore needs `targetPVC` (it writes the dump there under `command/`) and the
+app's own import tool loads it.
+
+By hand:
+
+```sh
+kubectl -n NS scale sts/APP --replicas=0
+rs restore latest --target /tmp/recovered
+gunzip -c /tmp/recovered/command/FILE | mysql -h HOST ...   # or mongorestore / redis-cli --pipe from stdin
+kubectl -n NS scale sts/APP --replicas=1
+```
+
+`rs` is `restic --repo NS/POLICY/restic --insecure-no-password` (see Single file).
+
 ## Whole PVC
 
 1. Scale down every workload using the PVC.
