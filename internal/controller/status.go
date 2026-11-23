@@ -73,7 +73,14 @@ func healthCondition(p *v1alpha1.BackupPolicy, backups []run, now time.Time) met
 	case !backups[len(backups)-1].ok:
 		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, "BackupFailed", backups[len(backups)-1].result.Message
 	default:
-		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, "BackupSucceeded", "latest backup succeeded"
+		cond.Status, cond.Reason = metav1.ConditionTrue, "BackupSucceeded"
+		// The runner's one-line summary (files, bytes, what restic added to the repository after dedup)
+		// is the health message, so kubectl describe shows what the last backup actually cost.
+		if msg := backups[len(backups)-1].result.Message; msg != "" {
+			cond.Message = msg
+		} else {
+			cond.Message = "latest backup succeeded"
+		}
 	}
 	if cond.Status != metav1.ConditionFalse {
 		if at, ok := staleAt(p); ok && now.After(at) {

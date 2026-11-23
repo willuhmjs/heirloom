@@ -77,9 +77,14 @@ func (r *PolicyReconciler) restoreActive(ctx context.Context, p *v1alpha1.Backup
 
 // startDue creates the backup and verify Jobs whose schedule slot has passed and records when it did. It
 // never starts a second Job of a role while one is active (what CronJob's concurrencyPolicy: Forbid did).
+// For the restic engine the two roles exclude each other outright: forget+prune takes an exclusive lock
+// and rewrites pack files, which is exactly what a verify reading the same repository must not race.
 func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, jobs []batchv1.Job, now time.Time) error {
 	created := p.CreationTimestamp.Time
-	if slot, ok := nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, created); ok && !slot.After(now) && !hasActive(jobs, jobcfg.ModeBackup) {
+	exclusive := p.Spec.Engine == v1alpha1.EngineRestic
+	activeBackup := hasActive(jobs, jobcfg.ModeBackup)
+	activeVerify := hasActive(jobs, jobcfg.ModeVerify)
+	if slot, ok := nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, created); ok && !slot.After(now) && !activeBackup && !(exclusive && activeVerify) {
 		if err := r.createJob(ctx, p, store, jobcfg.ModeBackup, scheduledJobName(p.Name, jobcfg.ModeBackup, slot)); err != nil {
 			return err
 		}
@@ -88,7 +93,7 @@ func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolic
 	if p.Spec.Verify == nil {
 		return nil
 	}
-	if slot, ok := nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, created); ok && !slot.After(now) && !hasActive(jobs, jobcfg.ModeVerify) {
+	if slot, ok := nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, created); ok && !slot.After(now) && !activeVerify && !(exclusive && activeBackup) {
 		if err := r.createJob(ctx, p, store, jobcfg.ModeVerify, scheduledJobName(p.Name, jobcfg.ModeVerify, slot)); err != nil {
 			return err
 		}
@@ -106,10 +111,11 @@ func (r *PolicyReconciler) createJob(ctx context.Context, p *v1alpha1.BackupPoli
 }
 
 // triggerManual starts one backup Job when spec.trigger.manual holds a value that was not run yet and no
-// backup is running.
+// backup is running (and, for restic, no verify that the run's prune could pull the packs out from).
 func (r *PolicyReconciler) triggerManual(ctx context.Context, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, jobs []batchv1.Job) error {
 	value := p.Spec.Trigger.Manual
-	if value == "" || value == p.Status.LastManualSync || hasActive(jobs, jobcfg.ModeBackup) {
+	if value == "" || value == p.Status.LastManualSync || hasActive(jobs, jobcfg.ModeBackup) ||
+		(p.Spec.Engine == v1alpha1.EngineRestic && hasActive(jobs, jobcfg.ModeVerify)) {
 		return nil
 	}
 	job, err := newJob(r.Scheme, r.Image, p, store, jobcfg.ModeBackup, manualJobName(p.Name, value, p.Generation))

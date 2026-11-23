@@ -842,3 +842,114 @@ func TestRestoreEmitsPhaseEvents(t *testing.T) {
 		}
 	}
 }
+
+// The restic engine keeps its chunk cache on scratch (the runner points --cache-dir there), so a restic
+// backup pod gets the scratch volume like a verify pod does. Plain backups must not grow one.
+func TestResticRunsGetScratchVolume(t *testing.T) {
+	c := newFake(t, testStore(), policyDue(filesPolicy()))
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if volume(onlyJob(t, c, jobcfg.ModeBackup).Spec.Template.Spec, "scratch") != nil {
+		t.Error("a plain snapshots backup must not get a scratch volume")
+	}
+
+	p := policyDue(filesPolicy())
+	p.Spec.Engine = v1alpha1.EngineRestic
+	p.Spec.Pod.ScratchStorageClassName = ptr.To("fast")
+	c = newFake(t, testStore(), p)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	pod := onlyJob(t, c, jobcfg.ModeBackup).Spec.Template.Spec
+	scratch := volume(pod, "scratch")
+	if scratch == nil || scratch.Ephemeral == nil || *scratch.Ephemeral.VolumeClaimTemplate.Spec.StorageClassName != "fast" ||
+		mount(pod.Containers[0], "scratch").MountPath != "/scratch" {
+		t.Errorf("restic backup scratch volume = %+v", scratch)
+	}
+}
+
+// forget+prune inside a restic backup rewrites pack files, so the two roles must not run at the same
+// time; the plain engine keeps them independent.
+func TestResticBackupAndVerifyExcludeEachOther(t *testing.T) {
+	activeBackup := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "bs-app-run-1", Namespace: "apps", Labels: jobLabels("app", jobcfg.ModeBackup)}}
+	activeVerify := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "bs-verify-app-1", Namespace: "apps", Labels: jobLabels("app", jobcfg.ModeVerify)}}
+
+	resticPolicy := func() *v1alpha1.BackupPolicy {
+		p := policyDue(filesPolicy())
+		p.Spec.Engine = v1alpha1.EngineRestic
+		p.Spec.Verify = &v1alpha1.Verify{Schedule: "30 * * * *"} // the same slot is due for both roles
+		return p
+	}
+
+	c := newFake(t, testStore(), resticPolicy(), activeBackup)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeVerify)); n != 0 {
+		t.Errorf("verify started while a restic backup runs: %d jobs", n)
+	}
+	// The plain engine runs both roles side by side.
+	plain := policyDue(filesPolicy())
+	plain.Spec.Verify = &v1alpha1.Verify{Schedule: "30 * * * *"}
+	c = newFake(t, testStore(), plain, activeBackup)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeVerify)); n != 1 {
+		t.Errorf("plain engine must still verify during a backup: %d jobs", n)
+	}
+
+	c = newFake(t, testStore(), resticPolicy(), activeVerify)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 0 {
+		t.Errorf("backup started while a restic verify runs: %d jobs", n)
+	}
+	var p v1alpha1.BackupPolicy
+	mustGet(t, c, "apps", "app", &p)
+	if p.Status.LastScheduleTime != nil {
+		t.Error("a blocked slot must not be recorded as run")
+	}
+	// The plain engine starts the backup anyway.
+	plain = policyDue(filesPolicy())
+	c = newFake(t, testStore(), plain, activeVerify)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 1 {
+		t.Errorf("plain engine must start backups during a verify: %d jobs", n)
+	}
+}
+
+// A manual trigger starts a backup; for restic it must wait out a running verify too, because the run's
+// prune would delete packs underneath the reading verify pod.
+func TestManualTriggerWaitsForARunningVerify(t *testing.T) {
+	p := filesPolicy()
+	p.Spec.Engine = v1alpha1.EngineRestic
+	p.Spec.Trigger.Manual = "now-1"
+	activeVerify := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "bs-verify-app-1", Namespace: "apps", Labels: jobLabels("app", jobcfg.ModeVerify)}}
+	c := newFake(t, testStore(), p, activeVerify)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 0 {
+		t.Errorf("manual backup started while a restic verify runs: %d jobs", n)
+	}
+	p.Spec.Engine = ""
+	c = newFake(t, testStore(), p, activeVerify)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 1 {
+		t.Errorf("plain engine keeps manual triggers independent of verify: %d jobs", n)
+	}
+}
+
+// The Healthy condition carries the successful run's summary, which is where restic reports what dedup
+// saved; runs without a message keep the generic wording.
+func TestHealthyMessageCarriesRunSummary(t *testing.T) {
+	msg := "restic snapshot abc12345: 7 files, 34 KiB, 1.2 MiB added to repository"
+	okJob, okPod := finishedJob("bs-app-1", "app", jobcfg.ModeBackup, true, testNow.Add(-time.Hour),
+		&jobcfg.Result{Mode: jobcfg.ModeBackup, OK: true, Snapshot: "abc12345", Message: msg, Time: testNow.Add(-time.Hour)})
+	c := newFake(t, testStore(), filesPolicy(), okJob, okPod)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	var got v1alpha1.BackupPolicy
+	mustGet(t, c, "apps", "app", &got)
+	if h := meta.FindStatusCondition(got.Status.Conditions, condHealthy); h == nil || h.Status != metav1.ConditionTrue || h.Message != msg {
+		t.Errorf("healthy = %+v", h)
+	}
+
+	bare, _ := finishedJob("bs-app-1", "app", jobcfg.ModeBackup, true, testNow.Add(-time.Hour), nil)
+	c = newFake(t, testStore(), filesPolicy(), bare)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	mustGet(t, c, "apps", "app", &got)
+	if h := meta.FindStatusCondition(got.Status.Conditions, condHealthy); h == nil || h.Message != "latest backup succeeded" {
+		t.Errorf("healthy without a run message = %+v", h)
+	}
+}

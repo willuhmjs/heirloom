@@ -40,6 +40,13 @@ type moverPod struct {
 
 func (m moverPod) readOnlyStore() bool { return m.mode != jobcfg.ModeBackup }
 
+// needsScratch: verify always gets the scratch volume (restored database, sample files), and every
+// restic run does as well: the runner points restic's chunk cache (--cache-dir) at it so a large cache
+// never lands on the node's root disk, honouring pod.scratchStorageClassName like verify does.
+func (m moverPod) needsScratch() bool {
+	return m.mode == jobcfg.ModeVerify || m.spec.Engine == v1alpha1.EngineRestic
+}
+
 func (m moverPod) readOnlySource() bool {
 	return m.spec.Source.Type == v1alpha1.SourceFiles && m.mode != jobcfg.ModeRestore
 }
@@ -137,7 +144,7 @@ func (m moverPod) moverContainer(encodedConfig string) corev1.Container {
 	if m.claim() != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: volSource, MountPath: jobcfg.SourceMount, ReadOnly: m.readOnlySource()})
 	}
-	if m.mode == jobcfg.ModeVerify {
+	if m.needsScratch() {
 		mounts = append(mounts, corev1.VolumeMount{Name: volScratch, MountPath: jobcfg.ScratchMount})
 	}
 	return corev1.Container{
@@ -176,7 +183,7 @@ func (m moverPod) volumes() []corev1.Volume {
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: c, ReadOnly: m.readOnlySource()},
 		}})
 	}
-	if m.mode == jobcfg.ModeVerify {
+	if m.needsScratch() {
 		vols = append(vols, corev1.Volume{Name: volScratch, VolumeSource: m.scratchSource()})
 	}
 	return vols
