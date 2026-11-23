@@ -5,21 +5,22 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	"github.com/willuhmjs/backshots/api/v1alpha1"
 )
 
 // emit records a Kubernetes Event when a recorder is configured (tests may leave it nil).
-func emit(rec record.EventRecorder, obj runtime.Object, eventType, reason, message string) {
+func emit(rec crtypes.EventRecorder, obj runtime.Object, eventType, reason, message string) {
 	if rec != nil {
-		rec.Event(obj, eventType, reason, message)
+		// The message is user- or condition-derived, so pass it as an argument, not a format string.
+		rec.Eventf(obj, nil, eventType, reason, "", "%s", message)
 	}
 }
 
 // healthEvents tells `kubectl describe` readers when a policy's health changes: a Warning when it turns bad or its
 // reason changes, a Normal event when it recovers. Steady states are not repeated.
-func healthEvents(rec record.EventRecorder, p *v1alpha1.BackupPolicy, before *metav1.Condition) {
+func healthEvents(rec crtypes.EventRecorder, p *v1alpha1.BackupPolicy, before *metav1.Condition) {
 	after := meta.FindStatusCondition(p.Status.Conditions, condHealthy)
 	if after == nil {
 		return
@@ -33,7 +34,7 @@ func healthEvents(rec record.EventRecorder, p *v1alpha1.BackupPolicy, before *me
 }
 
 // phaseEvent reports a Restore entering a new phase.
-func phaseEvent(rec record.EventRecorder, rs *v1alpha1.Restore) {
+func phaseEvent(rec crtypes.EventRecorder, rs *v1alpha1.Restore) {
 	switch rs.Status.Phase {
 	case phaseScalingDown:
 		emit(rec, rs, corev1.EventTypeNormal, "ScalingDown", "stopping the workloads before restoring")

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"strconv"
 	"time"
 
@@ -27,9 +28,34 @@ func parseSchedule(expr, tz string) (cron.Schedule, error) {
 	return cron.ParseStandard(expr)
 }
 
+// maxJitter bounds spec.jitter: enough to spread a stampede, small enough that a run still happens
+// inside its intended window for every sane schedule.
+const maxJitter = 6 * time.Hour
+
+// jitterOffset returns the policy's deterministic slot offset for one role: a stable hash of
+// namespace/name/role scaled into [0, jitter). The offset is the same every reconcile, so slots stay
+// predictable and the slot-derived Job names stay idempotent. Unset or unparsable jitter is 0
+// (validatePolicy surfaces unparsable values on the policy instead).
+func jitterOffset(p *v1alpha1.BackupPolicy, role jobcfg.Mode) time.Duration {
+	if p.Spec.Jitter == "" {
+		return 0
+	}
+	j, err := time.ParseDuration(p.Spec.Jitter)
+	if err != nil || j <= 0 {
+		return 0
+	}
+	sum := sha256.Sum256([]byte(p.Namespace + "/" + p.Name + "/" + string(role)))
+	var n uint64
+	for _, b := range sum[:8] {
+		n = n<<8 | uint64(b)
+	}
+	return time.Duration(n % uint64(j))
+}
+
 // nextSlot is the first scheduled time after the last run of a schedule, or after the policy was created if
-// it never ran. A slot that has passed is due. A long outage therefore causes one catch-up run, not a burst.
-func nextSlot(expr, tz string, last *metav1.Time, created time.Time) (time.Time, bool) {
+// it never ran, plus the policy's fixed jitter offset. A slot that has passed is due. A long outage
+// therefore causes one catch-up run, not a burst.
+func nextSlot(expr, tz string, last *metav1.Time, created time.Time, offset time.Duration) (time.Time, bool) {
 	sched, err := parseSchedule(expr, tz)
 	if err != nil {
 		return time.Time{}, false
@@ -38,7 +64,7 @@ func nextSlot(expr, tz string, last *metav1.Time, created time.Time) (time.Time,
 	if last != nil {
 		base = last.Time
 	}
-	return sched.Next(base), true
+	return sched.Next(base).Add(offset), true
 }
 
 // hasActive reports whether a Job of the role is still running (not finished, not being deleted).
@@ -83,7 +109,7 @@ func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolic
 	created := p.CreationTimestamp.Time
 	activeBackup := hasActive(jobs, jobcfg.ModeBackup)
 	activeVerify := hasActive(jobs, jobcfg.ModeVerify)
-	if slot, ok := nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, created); ok && !slot.After(now) && !activeBackup && !activeVerify {
+	if slot, ok := nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, created, jitterOffset(p, jobcfg.ModeBackup)); ok && !slot.After(now) && !activeBackup && !activeVerify {
 		if err := r.createJob(ctx, p, store, jobcfg.ModeBackup, scheduledJobName(p.Name, jobcfg.ModeBackup, slot)); err != nil {
 			return err
 		}
@@ -92,7 +118,7 @@ func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolic
 	if p.Spec.Verify == nil {
 		return nil
 	}
-	if slot, ok := nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, created); ok && !slot.After(now) && !activeVerify && !activeBackup {
+	if slot, ok := nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, created, jitterOffset(p, jobcfg.ModeVerify)); ok && !slot.After(now) && !activeVerify && !activeBackup {
 		if err := r.createJob(ctx, p, store, jobcfg.ModeVerify, scheduledJobName(p.Name, jobcfg.ModeVerify, slot)); err != nil {
 			return err
 		}
@@ -159,9 +185,9 @@ func requeueIn(p *v1alpha1.BackupPolicy, now time.Time) time.Duration {
 		}
 	}
 	if !p.Spec.Suspend {
-		consider(nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, p.CreationTimestamp.Time))
+		consider(nextSlot(p.Spec.Schedule, p.Spec.TimeZone, p.Status.LastScheduleTime, p.CreationTimestamp.Time, jitterOffset(p, jobcfg.ModeBackup)))
 		if p.Spec.Verify != nil {
-			consider(nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, p.CreationTimestamp.Time))
+			consider(nextSlot(p.Spec.Verify.Schedule, p.Spec.TimeZone, p.Status.LastVerifyScheduleTime, p.CreationTimestamp.Time, jitterOffset(p, jobcfg.ModeVerify)))
 		}
 	}
 	consider(staleAt(p))

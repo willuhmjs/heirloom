@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -13,10 +14,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	"github.com/willuhmjs/backshots/api/v1alpha1"
 	"github.com/willuhmjs/backshots/internal/jobcfg"
@@ -51,7 +55,7 @@ type RestoreReconciler struct {
 	Image  string
 	Now    func() time.Time
 	// Recorder emits Events as the restore progresses; nil disables them.
-	Recorder record.EventRecorder
+	Recorder crtypes.EventRecorder
 }
 
 func (r *RestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -59,7 +63,29 @@ func (r *RestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("restore").
 		For(&v1alpha1.Restore{}).
 		Owns(&batchv1.Job{}).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(r.restoresOfMover)).
 		Complete(r)
+}
+
+// restoresOfMover maps a backup or verify Job to the Restores of its policy, so a Restore waiting for
+// the Job to finish starts the moment it does.
+func (r *RestoreReconciler) restoresOfMover(ctx context.Context, obj client.Object) []reconcile.Request {
+	l := obj.GetLabels()
+	policy := l[jobcfg.LabelPolicy]
+	if policy == "" || l[jobcfg.LabelRole] == string(jobcfg.ModeRestore) {
+		return nil
+	}
+	var list v1alpha1.RestoreList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if list.Items[i].Spec.PolicyRef == policy {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
+	}
+	return reqs
 }
 
 func restoreJobName(restore string) string { return "bs-restore-" + restore }
@@ -134,14 +160,18 @@ func (r *RestoreReconciler) finalize(ctx context.Context, rs *v1alpha1.Restore) 
 			return err
 		}
 	}
+	if err := r.restoreHPAs(ctx, rs); err != nil {
+		return err
+	}
 	controllerutil.RemoveFinalizer(rs, finalizerName)
 	return r.Update(ctx, rs)
 }
 
-// failBeforeRestore ends a Restore whose Job never ran. The data is untouched, so workloads always come back.
+// failBeforeRestore ends a Restore whose Job never ran. The data is untouched, so workloads and
+// autoscalers always come back.
 func (r *RestoreReconciler) failBeforeRestore(rs *v1alpha1.Restore, msg string) {
 	rs.Status.Message = msg
-	if len(rs.Status.Scaled) > 0 {
+	if len(rs.Status.Scaled) > 0 || len(rs.Status.ScaledHPAs) > 0 {
 		rs.Status.Phase = phaseScalingUp
 		return
 	}
@@ -203,6 +233,15 @@ func (r *RestoreReconciler) pending(ctx context.Context, rs *v1alpha1.Restore) (
 		rs.Status.Message = fmt.Sprintf("waiting for restore %q", blocker)
 		return ctrl.Result{RequeueAfter: queuePoll}, nil
 	}
+	// The other half of the repository mutex: the policy pauses new runs once it sees this Restore,
+	// but a backup or verify that was already running would otherwise read and rewrite (forget+prune)
+	// the same repository under the restore. Wait for it to finish.
+	if mover, err := r.activeMover(ctx, rs); err != nil {
+		return ctrl.Result{}, err
+	} else if mover != "" {
+		rs.Status.Message = fmt.Sprintf("waiting for %q to finish before restoring", mover)
+		return ctrl.Result{RequeueAfter: queuePoll}, nil
+	}
 	rs.Status.Message = ""
 	if len(rs.Spec.ScaleDown) > 0 {
 		since := r.now()
@@ -262,6 +301,25 @@ func (r *RestoreReconciler) blockedBy(ctx context.Context, rs *v1alpha1.Restore)
 	return "", nil
 }
 
+// activeMover returns the name of a running backup or verify Job of the policy, or "". A Restore and
+// those runs must never share the restic repository at the same time (see pending).
+func (r *RestoreReconciler) activeMover(ctx context.Context, rs *v1alpha1.Restore) (string, error) {
+	var jobs batchv1.JobList
+	if err := r.List(ctx, &jobs, client.InNamespace(rs.Namespace), client.MatchingLabels{jobcfg.LabelPolicy: rs.Spec.PolicyRef}); err != nil {
+		return "", err
+	}
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if j.Labels[jobcfg.LabelRole] == string(jobcfg.ModeRestore) || !j.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if done, _ := jobState(j); !done {
+			return j.Name, nil
+		}
+	}
+	return "", nil
+}
+
 // validateRestore checks that the restore options make sense for the policy's source type.
 func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 	if err := validateSource(p.Spec.Source); err != nil {
@@ -294,6 +352,15 @@ func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 	case v1alpha1.SourcePostgres:
 		if len(s.Paths) > 0 || s.Delete || s.TargetPVC != "" {
 			return fmt.Errorf("paths, delete and targetPVC are not valid for postgres sources")
+		}
+	case v1alpha1.SourceCommand:
+		if len(s.Databases) > 0 || s.Delete {
+			return fmt.Errorf("databases and delete are not valid for command sources")
+		}
+		// There is no generic loader for arbitrary dumps: a command restore writes them to a PVC the
+		// caller names, and the app's own import tool loads them from there.
+		if s.TargetPVC == "" {
+			return fmt.Errorf("restore.targetPVC is required for command sources (the PVC the dumps are written to)")
 		}
 	}
 	return nil
@@ -328,6 +395,11 @@ func (r *RestoreReconciler) scalingDown(ctx context.Context, rs *v1alpha1.Restor
 	refs := rs.Spec.ScaleDown
 	// Persist original replica counts before touching anything so a crash cannot lose them.
 	if recorded, err := r.recordReplicas(ctx, rs); err != nil || recorded {
+		return ctrl.Result{}, err
+	}
+	// Then pause every autoscaler aimed at those workloads, recording its bounds first, so HPA (or
+	// any autoscaler writing spec.replicas) cannot scale the workload back up under the restore.
+	if pending, err := r.quiesceHPAs(ctx, rs); err != nil || pending {
 		return ctrl.Result{}, err
 	}
 	for _, sc := range rs.Status.Scaled {
@@ -379,6 +451,7 @@ func (r *RestoreReconciler) recordReplicas(ctx context.Context, rs *v1alpha1.Res
 	return false, nil
 }
 
+// isScaled reports whether ref's replica count is already recorded.
 func isScaled(rs *v1alpha1.Restore, ref v1alpha1.WorkloadRef) bool {
 	for _, sc := range rs.Status.Scaled {
 		if sc.WorkloadRef == ref {
@@ -388,19 +461,109 @@ func isScaled(rs *v1alpha1.Restore, ref v1alpha1.WorkloadRef) bool {
 	return false
 }
 
+// isHPAPaused reports whether the autoscaler's bounds were already recorded for this restore.
+func isHPAPaused(rs *v1alpha1.Restore, name string) bool {
+	for _, h := range rs.Status.ScaledHPAs {
+		if h.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// quiesceHPAs pauses every HorizontalPodAutoscaler targeting a scaleDown workload. Bounds are
+// recorded into status one at a time (persisted before the next is touched) and then applied, so a
+// crash mid-way still knows everything it has to put back. On clusters that reject replica bounds
+// of 0 (before 1.30) the autoscaler is left running with a recorded warning instead of failing the
+// restore — the pre-quiesce behaviour, and better than an outage. It reports whether the caller
+// should requeue so status lands first.
+func (r *RestoreReconciler) quiesceHPAs(ctx context.Context, rs *v1alpha1.Restore) (bool, error) {
+	var list autoscalingv2.HorizontalPodAutoscalerList
+	if err := r.Reader.List(ctx, &list, client.InNamespace(rs.Namespace)); err != nil {
+		return false, err
+	}
+	for _, ref := range rs.Spec.ScaleDown {
+		for i := range list.Items {
+			h := &list.Items[i]
+			if !h.DeletionTimestamp.IsZero() || h.Spec.ScaleTargetRef.Name != ref.Name || !strings.EqualFold(h.Spec.ScaleTargetRef.Kind, ref.Kind) {
+				continue
+			}
+			if isHPAPaused(rs, h.Name) {
+				continue
+			}
+			min := int32(1)
+			if h.Spec.MinReplicas != nil {
+				min = *h.Spec.MinReplicas
+			}
+			rs.Status.ScaledHPAs = append(rs.Status.ScaledHPAs, v1alpha1.ScaledHPA{Name: h.Name, MinReplicas: min, MaxReplicas: h.Spec.MaxReplicas})
+			return true, nil // persist the record before touching the autoscaler
+		}
+	}
+	var warnings []string
+	for _, rec := range rs.Status.ScaledHPAs {
+		var h autoscalingv2.HorizontalPodAutoscaler
+		if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: rec.Name}, &h); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue // deleted since recorded: nothing to pause or restore
+			}
+			return false, err
+		}
+		if h.Spec.MaxReplicas == 0 && h.Spec.MinReplicas != nil && *h.Spec.MinReplicas == 0 {
+			continue
+		}
+		original := h.DeepCopy()
+		h.Spec.MinReplicas = ptr.To[int32](0)
+		h.Spec.MaxReplicas = 0
+		if err := r.Patch(ctx, &h, client.MergeFrom(original)); err != nil {
+			if apierrors.IsInvalid(err) {
+				warnings = append(warnings, fmt.Sprintf("could not pause autoscaler %q (its API rejects 0 replicas): autoscaling may fight the restore", rec.Name))
+				continue
+			}
+			return false, client.IgnoreNotFound(err)
+		}
+	}
+	if len(warnings) > 0 {
+		rs.Status.Message = strings.Join(warnings, "; ")
+	}
+	return false, nil
+}
+
+// restoreHPAs puts every recorded autoscaler's bounds back.
+func (r *RestoreReconciler) restoreHPAs(ctx context.Context, rs *v1alpha1.Restore) error {
+	for _, rec := range rs.Status.ScaledHPAs {
+		var h autoscalingv2.HorizontalPodAutoscaler
+		if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: rec.Name}, &h); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		original := h.DeepCopy()
+		if h.Spec.MaxReplicas == rec.MaxReplicas && h.Spec.MinReplicas != nil && *h.Spec.MinReplicas == rec.MinReplicas {
+			continue
+		}
+		h.Spec.MinReplicas = ptr.To(rec.MinReplicas)
+		h.Spec.MaxReplicas = rec.MaxReplicas
+		if err := r.Patch(ctx, &h, client.MergeFrom(original)); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+	}
+	return nil
+}
+
 // updateWorkload applies mutate to the workload and patches it when mutate reports a change.
 func (r *RestoreReconciler) updateWorkload(ctx context.Context, namespace string, ref v1alpha1.WorkloadRef, mutate func(workload) bool) error {
 	w, err := getWorkload(ctx, r.Reader, namespace, ref)
 	if err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	original := w.Object.DeepCopyObject().(client.Object)
+	original := w.DeepCopyObject().(client.Object)
 	if !mutate(w) {
 		return nil
 	}
 	// A merge patch of only what changed (replicas, annotations): no resourceVersion conflicts with the workload's
 	// own controller, and no risk of writing back fields this client does not know about.
-	return r.Patch(ctx, w.Object, client.MergeFrom(original))
+	return r.Patch(ctx, w.Object, client.MergeFrom(original)) //nolint:staticcheck // w.Object is the registered concrete type, not the wrapper w
 }
 
 func (r *RestoreReconciler) running(ctx context.Context, rs *v1alpha1.Restore) error {
@@ -439,6 +602,13 @@ func (r *RestoreReconciler) createJob(ctx context.Context, rs *v1alpha1.Restore)
 	p, store, err := r.load(ctx, rs)
 	if err != nil {
 		return err
+	}
+	// A store with mountOptions is mounted through a provisioned claim; make sure it exists before
+	// the mover pod would wait on it forever in Pending.
+	if _, msg, err := ensureStoreClaim(ctx, r.Client, r.Reader, r.Scheme, p, store); err != nil {
+		return err
+	} else if msg != "" {
+		return fmt.Errorf("store claim: %s", msg)
 	}
 	job, err := r.restoreJob(rs, p, store)
 	if err != nil {
@@ -482,8 +652,12 @@ func (r *RestoreReconciler) restoreJob(rs *v1alpha1.Restore, p *v1alpha1.BackupP
 	return job, controllerutil.SetControllerReference(rs, job, r.Scheme)
 }
 
-// scalingUp puts workloads back, then ends the Restore: Succeeded only if the restore Job succeeded.
+// scalingUp puts workloads and autoscalers back, then ends the Restore: Succeeded only if the
+// restore Job succeeded.
 func (r *RestoreReconciler) scalingUp(ctx context.Context, rs *v1alpha1.Restore) error {
+	if err := r.restoreHPAs(ctx, rs); err != nil {
+		return err
+	}
 	for _, sc := range rs.Status.Scaled {
 		err := r.updateWorkload(ctx, rs.Namespace, sc.WorkloadRef, func(w workload) bool { return w.scaleUp(rs.Name, sc.Replicas) })
 		if err != nil {

@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -621,11 +621,11 @@ func TestStaleAtGraceIsClamped(t *testing.T) {
 func TestTimeZoneAppliesToTheSchedule(t *testing.T) {
 	created := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	// 09:00 in New York is 14:00 UTC in November (EST, UTC-5).
-	got, ok := nextSlot("0 9 * * *", "America/New_York", nil, created)
+	got, ok := nextSlot("0 9 * * *", "America/New_York", nil, created, 0)
 	if !ok || !got.Equal(time.Date(2026, 11, 22, 14, 0, 0, 0, time.UTC)) {
 		t.Errorf("zoned slot = %v ok=%v", got, ok)
 	}
-	got, _ = nextSlot("0 9 * * *", "", nil, created)
+	got, _ = nextSlot("0 9 * * *", "", nil, created, 0)
 	if !got.Equal(time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)) {
 		t.Errorf("UTC slot = %v", got)
 	}
@@ -744,7 +744,7 @@ func TestHealthGaugeExistsForAPolicyThatNeverSucceeded(t *testing.T) {
 	forgetMetrics("gauge-ns", "never")
 }
 
-func nextEvent(t *testing.T, rec *record.FakeRecorder) string {
+func nextEvent(t *testing.T, rec *events.FakeRecorder) string {
 	t.Helper()
 	select {
 	case e := <-rec.Events:
@@ -756,7 +756,7 @@ func nextEvent(t *testing.T, rec *record.FakeRecorder) string {
 
 func TestHealthEventsOnTransitionsOnly(t *testing.T) {
 	p := filesPolicy()
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	cond := func(s metav1.ConditionStatus, reason, msg string) *metav1.Condition {
 		return &metav1.Condition{Type: condHealthy, Status: s, Reason: reason, Message: msg}
 	}
@@ -797,7 +797,7 @@ func TestHealthEventsOnTransitionsOnly(t *testing.T) {
 func TestRestoreEmitsPhaseEvents(t *testing.T) {
 	c := newFake(t, testStore(), filesPolicy(), testRestore(func(r *v1alpha1.Restore) { r.Spec.ScaleDown = nil }))
 	r := newRestoreReconciler(c)
-	rec := record.NewFakeRecorder(20)
+	rec := events.NewFakeRecorder(20)
 	r.Recorder = rec
 	for range 3 {
 		reconcileKey(t, r, "apps", "r1")

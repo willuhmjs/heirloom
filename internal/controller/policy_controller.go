@@ -13,11 +13,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	"github.com/willuhmjs/backshots/api/v1alpha1"
 	"github.com/willuhmjs/backshots/internal/jobcfg"
@@ -27,13 +27,15 @@ import (
 // schedule slot is due and reports the outcome of the runs in the policy status.
 type PolicyReconciler struct {
 	client.Client
+	// Reader reads RBAC objects uncached (they are not in the label-filtered cache).
+	Reader client.Reader
 	Scheme *runtime.Scheme
 	// Image is the runner image (BACKSHOTS_IMAGE).
 	Image string
 	// Now is overridable for tests.
 	Now func() time.Time
 	// Recorder emits Events on health changes; nil disables them.
-	Recorder record.EventRecorder
+	Recorder crtypes.EventRecorder
 }
 
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -106,7 +108,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Status().Update(ctx, &p); err != nil {
 		if apierrors.IsConflict(err) {
 			// Our cached copy lags our own previous write. Not an error: look again.
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 		}
 		return res, err
 	}
@@ -131,6 +133,12 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1alpha1.BackupPoli
 	if err != nil {
 		return err
 	}
+	if ready, msg, err := ensureStoreClaim(ctx, r.Client, r.Reader, r.Scheme, p, &store); err != nil {
+		return err
+	} else if !ready {
+		setReady(p, false, "StoreClaimPending", msg)
+		return nil
+	}
 	restoring, err := r.restoreActive(ctx, p)
 	if err != nil {
 		return err
@@ -142,6 +150,11 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1alpha1.BackupPoli
 	case restoring != "":
 		setReady(p, true, "RestoreInProgress", fmt.Sprintf("paused while restore %q runs", restoring))
 	default:
+		if p.Spec.Source.Type == v1alpha1.SourceCommand {
+			if err := r.ensureExecutorRBAC(ctx, p); err != nil {
+				return err
+			}
+		}
 		if err := r.triggerManual(ctx, p, &store, jobs); err != nil {
 			return err
 		}

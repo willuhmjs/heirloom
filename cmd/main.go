@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -14,11 +15,17 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,9 +33,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/yaml"
 
 	"github.com/willuhmjs/backshots/api/v1alpha1"
 	"github.com/willuhmjs/backshots/internal/controller"
+	"github.com/willuhmjs/backshots/internal/crds"
 	"github.com/willuhmjs/backshots/internal/jobcfg"
 	"github.com/willuhmjs/backshots/internal/runner"
 )
@@ -47,8 +56,10 @@ func main() {
 		os.Exit(runner.Run(ctrl.SetupSignalHandler()))
 	case "install":
 		exitOnError(runInstall(args))
+	case "install-crds":
+		exitOnError(runInstallCRDs())
 	default:
-		exitOnError(fmt.Errorf("unknown command %q (want manager, run or install)", cmd))
+		exitOnError(fmt.Errorf("unknown command %q (want manager, run, install or install-crds)", cmd))
 	}
 }
 
@@ -71,7 +82,7 @@ func runManager(args []string) error {
 	metricsAddr := fs.String("metrics-bind-address", ":8443", "address the metrics endpoint binds to")
 	metricsSecure := fs.Bool("metrics-secure", true, "serve metrics over TLS and require an authenticated, authorized caller (token review + subject access review)")
 	probeAddr := fs.String("health-probe-bind-address", ":8081", "address the health probe endpoint binds to")
-	leaderElect := fs.Bool("leader-elect", false, "enable leader election for the controller manager")
+	leaderElect := fs.Bool("leader-elect", true, "enable leader election for the controller manager")
 	zapOpts := zap.Options{}
 	zapOpts.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -103,10 +114,10 @@ func runManager(args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating manager: %w", err)
 	}
-	if err := (&controller.PolicyReconciler{Client: mgr.GetClient(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorderFor("backshots-policy")}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.PolicyReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("backshots-policy")}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policy controller: %w", err)
 	}
-	restore := &controller.RestoreReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorderFor("backshots-restore")}
+	restore := &controller.RestoreReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("backshots-restore")}
 	if err := restore.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up restore controller: %w", err)
 	}
@@ -154,14 +165,14 @@ func copyExecutable(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	if err := out.Close(); err != nil {
@@ -183,4 +194,56 @@ func metricsOptions(addr string, secure bool) metricsserver.Options {
 		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 	return opts
+}
+
+// runInstallCRDs applies the CRD manifests embedded in this binary through the in-cluster
+// credentials. The Helm chart runs it from a pre-install/pre-upgrade hook whose ServiceAccount can
+// touch customresourcedefinitions, which is the missing half of Helm's "crds/ are installed once,
+// never upgraded" behaviour.
+func runInstallCRDs() error {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return err
+	}
+	dc, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	crdsGV := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	entries, err := crds.FS.ReadDir("manifests")
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("this binary embeds no CRD manifests")
+	}
+	for _, e := range entries {
+		raw, err := crds.FS.ReadFile("manifests/" + e.Name())
+		if err != nil {
+			return err
+		}
+		var obj map[string]any
+		if err := yaml.Unmarshal(raw, &obj); err != nil {
+			return fmt.Errorf("%s: %w", e.Name(), err)
+		}
+		u := &unstructured.Unstructured{Object: obj}
+		name := u.GetName()
+		existing, err := dc.Resource(crdsGV).Get(context.Background(), name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			if _, err := dc.Resource(crdsGV).Create(context.Background(), u, metav1.CreateOptions{}); err != nil {
+				return fmt.Errorf("create CRD %s: %w", name, err)
+			}
+			fmt.Println("installed CRD", name)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("get CRD %s: %w", name, err)
+		}
+		u.SetResourceVersion(existing.GetResourceVersion())
+		if _, err := dc.Resource(crdsGV).Update(context.Background(), u, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update CRD %s: %w", name, err)
+		}
+		fmt.Println("updated CRD", name)
+	}
+	return nil
 }

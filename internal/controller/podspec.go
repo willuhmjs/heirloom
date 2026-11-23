@@ -22,6 +22,10 @@ const (
 
 	defaultActiveDeadline int64 = 3600
 	defaultScratchSize          = "10Gi"
+
+	// ExecutorServiceAccount is the namespace-local identity created for policies whose source execs
+	// into app pods (command sources). Its Role grants nothing but pod lookup and pods/exec.
+	ExecutorServiceAccount = "backshots-executor"
 )
 
 // moverPod holds everything needed to render the pod of one backup, verify or restore run,
@@ -72,6 +76,13 @@ func (m moverPod) claim() string {
 	return ""
 }
 
+// needsExecutorRBAC reports whether mover pods of this policy need the in-cluster identity that lets
+// them exec into app pods (command sources; restore of a command source writes to a PVC and does not
+// exec).
+func (m moverPod) needsExecutorRBAC() bool {
+	return m.spec.Source.Type == v1alpha1.SourceCommand && m.mode == jobcfg.ModeBackup
+}
+
 func (m moverPod) podSpec() (corev1.PodSpec, error) {
 	if err := validateSource(m.spec.Source); err != nil {
 		return corev1.PodSpec{}, err
@@ -88,10 +99,12 @@ func (m moverPod) podSpec() (corev1.PodSpec, error) {
 	if err != nil {
 		return corev1.PodSpec{}, fmt.Errorf("encoding runner config: %w", err)
 	}
-	return corev1.PodSpec{
+	spec := corev1.PodSpec{
 		RestartPolicy: corev1.RestartPolicyNever,
-		// Movers never talk to the Kubernetes API; do not hand them a token.
-		AutomountServiceAccountToken: ptr.To(false),
+		// Movers never talk to the Kubernetes API; do not hand them a token. The one exception is the
+		// command source: its mover execs into the app pod through the API using the scoped
+		// backshots-executor identity the controller maintains for the policy.
+		AutomountServiceAccountToken: ptr.To(m.needsExecutorRBAC()),
 		ImagePullSecrets:             m.spec.Pod.ImagePullSecrets,
 		InitContainers:               []corev1.Container{m.installContainer()},
 		Containers:                   []corev1.Container{m.moverContainer(encoded)},
@@ -99,7 +112,11 @@ func (m moverPod) podSpec() (corev1.PodSpec, error) {
 		NodeSelector:                 m.spec.Pod.NodeSelector,
 		Tolerations:                  m.spec.Pod.Tolerations,
 		PriorityClassName:            m.spec.Pod.PriorityClassName,
-	}, nil
+	}
+	if m.needsExecutorRBAC() {
+		spec.ServiceAccountName = ExecutorServiceAccount
+	}
+	return spec, nil
 }
 
 func (m moverPod) installContainer() corev1.Container {
@@ -167,18 +184,44 @@ func (m moverPod) moverContainer(encodedConfig string) corev1.Container {
 		},
 		TerminationMessagePath:   jobcfg.TerminationLog,
 		TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
-		Resources:                m.spec.Pod.Resources,
+		Resources:                m.moverResources(),
 		VolumeMounts:             mounts,
 	}
 }
 
+// moverResources are the pod's resources with defaults applied where unset. A best-effort mover is
+// the first pod a node evicts under disk or memory pressure, and restic's repository index alone runs
+// a few hundred MiB, so the default requests size for that. Limits stay open unless the user sets
+// them: a limit that is too low turns into a self-inflicted backup failure on a large repository.
+func (m moverPod) moverResources() corev1.ResourceRequirements {
+	res := *m.spec.Pod.Resources.DeepCopy()
+	if res.Requests == nil {
+		res.Requests = corev1.ResourceList{}
+	}
+	if _, ok := res.Requests[corev1.ResourceCPU]; !ok {
+		res.Requests[corev1.ResourceCPU] = resource.MustParse("100m")
+	}
+	if _, ok := res.Requests[corev1.ResourceMemory]; !ok {
+		res.Requests[corev1.ResourceMemory] = resource.MustParse("512Mi")
+	}
+	return res
+}
+
 func (m moverPod) volumes() []corev1.Volume {
+	// With mountOptions the export arrives through a provisioned static PV/PVC (an inline NFS volume
+	// cannot carry mount options); otherwise the mover mounts the export directly.
+	storeVol := corev1.Volume{Name: volStore, VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{
+		Server: m.store.Spec.NFS.Server,
+		Path:   m.store.Spec.NFS.Path,
+	}}}
+	if len(m.store.Spec.NFS.MountOptions) > 0 {
+		storeVol.VolumeSource = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+			ClaimName: storeClaimName(m.namespace, m.store.Name),
+		}}
+	}
 	vols := []corev1.Volume{
 		{Name: volTools, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: volStore, VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{
-			Server: m.store.Spec.NFS.Server,
-			Path:   m.store.Spec.NFS.Path,
-		}}},
+		storeVol,
 	}
 	if c := m.claim(); c != "" {
 		vols = append(vols, corev1.Volume{Name: volSource, VolumeSource: corev1.VolumeSource{
@@ -250,6 +293,7 @@ func validateSource(s v1alpha1.Source) error {
 		v1alpha1.SourceFiles:    s.Files != nil,
 		v1alpha1.SourceSQLite:   s.SQLite != nil,
 		v1alpha1.SourcePostgres: s.Postgres != nil,
+		v1alpha1.SourceCommand:  s.Command != nil,
 	}
 	known, selected := set[s.Type]
 	if !known {
@@ -275,6 +319,10 @@ func validateSource(s v1alpha1.Source) error {
 	case v1alpha1.SourcePostgres:
 		if s.Postgres.Image == "" || s.Postgres.Host == "" {
 			return fmt.Errorf("source.postgres.image and source.postgres.host are required")
+		}
+	case v1alpha1.SourceCommand:
+		if s.Command.File == "" || len(s.Command.Command) == 0 || len(s.Command.PodSelector) == 0 {
+			return fmt.Errorf("source.command.podSelector, source.command.command and source.command.file are required")
 		}
 	}
 	return nil

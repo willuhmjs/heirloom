@@ -76,7 +76,7 @@ func postgresPolicy() *v1alpha1.BackupPolicy {
 }
 
 func newPolicyReconciler(c client.Client) *PolicyReconciler {
-	return &PolicyReconciler{Client: c, Scheme: c.Scheme(), Image: testImage, Now: func() time.Time { return testNow }}
+	return &PolicyReconciler{Client: c, Reader: c, Scheme: c.Scheme(), Image: testImage, Now: func() time.Time { return testNow }}
 }
 
 func reconcileKey(t *testing.T, r interface {

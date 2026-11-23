@@ -45,7 +45,7 @@ func deriveStatus(p *v1alpha1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Po
 			Message:  last.result.Message,
 		}
 	}
-	st.NextSyncTime = nextSync(p.Spec, now)
+	st.NextSyncTime = nextSync(p, now)
 }
 
 // applySuccessfulBackup copies the newest successful run into the status.
@@ -157,15 +157,15 @@ func applyManual(st *v1alpha1.BackupPolicyStatus, value string, generation int64
 	}
 }
 
-func nextSync(spec v1alpha1.BackupPolicySpec, now time.Time) *metav1.Time {
-	if spec.Suspend {
+func nextSync(p *v1alpha1.BackupPolicy, now time.Time) *metav1.Time {
+	if p.Spec.Suspend {
 		return nil
 	}
-	sched, err := parseSchedule(spec.Schedule, spec.TimeZone)
+	sched, err := parseSchedule(p.Spec.Schedule, p.Spec.TimeZone)
 	if err != nil {
 		return nil
 	}
-	return metaTime(sched.Next(now))
+	return metaTime(sched.Next(now).Add(jitterOffset(p, jobcfg.ModeBackup)))
 }
 
 func setReady(p *v1alpha1.BackupPolicy, ok bool, reason, message string) {
@@ -199,6 +199,15 @@ func validatePolicy(p *v1alpha1.BackupPolicy) error {
 	}
 	if _, err := parseSchedule(p.Spec.Schedule, p.Spec.TimeZone); err != nil {
 		return fmt.Errorf("schedule: %w", err)
+	}
+	if j := p.Spec.Jitter; j != "" {
+		d, err := time.ParseDuration(j)
+		if err != nil {
+			return fmt.Errorf("jitter %q: %w", j, err)
+		}
+		if d < 0 || d > maxJitter {
+			return fmt.Errorf("jitter %s: must be between 0 and %s", j, maxJitter)
+		}
 	}
 	if v := p.Spec.Verify; v != nil {
 		if err := validateExpr("verify.schedule", v.Schedule); err != nil {
