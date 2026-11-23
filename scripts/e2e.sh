@@ -192,7 +192,9 @@ spec:
       - {name: f, persistentVolumeClaim: {claimName: files-data}}
       - {name: s, persistentVolumeClaim: {claimName: sqlite-data}}
 EOF
-wait_for "postgres is accepting connections" 240 k -n $NS exec deploy/postgres -- pg_isready -U postgres
+# Over TCP on purpose: the image first runs a temporary server that listens on the Unix socket only, answers
+# pg_isready, then shuts down and restarts as the real one.
+wait_for "postgres is accepting connections" 240 k -n $NS exec deploy/postgres -- pg_isready -h 127.0.0.1 -U postgres
 wait_for "web is running" 120 k -n $NS rollout status deploy/web --timeout=5s
 pg -qc "create database app" -c "create database blog" >/dev/null
 pg -d app -qc "create table users(id int, n text); insert into users select g,'u'||g from generate_series(1,500) g;" >/dev/null
@@ -200,7 +202,7 @@ pg -d blog -qc "create table posts(id int); insert into posts select generate_se
 web 'mkdir -p /data/docs/deep /data/media && cd /data && echo hello > docs/a.txt && echo world > docs/deep/b.txt &&
   dd if=/dev/urandom of=media/blob.bin bs=1k count=256 2>/dev/null && printf "#!/bin/sh\necho hi\n" > run.sh &&
   chmod 750 run.sh && chown 1000:1000 docs/a.txt run.sh && ln -s docs/a.txt link-to-a &&
-  sqlite3 /db/app.db "pragma journal_mode=wal; create table t(id integer primary key, v text); insert into t(v) select \"row\"||value from generate_series(1,300);"' >/dev/null
+  sqlite3 /db/app.db "pragma journal_mode=wal; create table t(id integer primary key, v text); insert into t(v) select value from generate_series(1,300);"' >/dev/null
 
 k apply -f - >/dev/null <<EOF
 apiVersion: backshots.io/v1alpha1

@@ -671,10 +671,14 @@ func TestManualTriggerValueCanBeReused(t *testing.T) {
 		t.Fatalf("lastManualSync = %q", cur.Status.LastManualSync)
 	}
 
-	// Another value, then back to the first one: a new generation each time.
-	for gen, value := range map[int64]string{2: "other", 3: "go"} {
+	// Another value, then back to the first one: a new generation each time. In this order: ranging over a map
+	// would shuffle it and make the test pass or fail by luck.
+	for _, step := range []struct {
+		gen   int64
+		value string
+	}{{2, "other"}, {3, "go"}} {
 		mustGet(t, c, "apps", "app", &cur)
-		cur.Generation, cur.Spec.Trigger.Manual = gen, value
+		cur.Generation, cur.Spec.Trigger.Manual = step.gen, step.value
 		if err := c.Update(context.Background(), &cur); err != nil {
 			t.Fatal(err)
 		}
