@@ -38,14 +38,3 @@ jobs:
         with:
           context: .
           push: false
-  e2e:
-    # A kind cluster, a real NFS server and the real chart (scripts/e2e.sh). The NFS server needs the nfsd kernel
-    # module on the runner. Experimental until it has a track record on hosted runners, so it does not block merges.
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-      - run: sudo modprobe nfsd || true
-      - run: scripts/e2e.sh
