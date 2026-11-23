@@ -66,6 +66,12 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              jitter:
+                description: |-
+                  Jitter shifts every scheduled slot of this policy by a fixed, deterministic per-policy offset
+                  below Jitter (a duration like "15m"), so a hundred policies on "0 * * * *" do not all hit the
+                  NAS at :00. The offset is stable across runs; keep Jitter well under the schedule interval.
+                type: string
               minSourcePercent:
                 default: 50
                 description: |-
@@ -247,9 +253,61 @@ spec:
                 minLength: 1
                 type: string
               source:
-                description: Source selects exactly one of files, sqlite, postgres,
-                  matching Type.
+                description: Source selects exactly one of files, sqlite, postgres
+                  or command, matching Type.
                 properties:
+                  command:
+                    description: |-
+                      CommandSource runs a command in a running pod and stores its stdout in the snapshot. This is how
+                      databases backshots does not speak natively get consistent dumps: mysqldump, mongodump,
+                      redis-cli --rdb - ... the command runs inside its own container, with its own tools, client version
+                      and authentication. The dump lands in the snapshot as command/<file>; a restore writes it to a PVC
+                      (restore.targetPVC) for the app's own import tool to load.
+                    properties:
+                      command:
+                        description: Command run inside the container; its stdout
+                          becomes the dump.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      container:
+                        description: Container inside the selected pod. Empty means
+                          its first container.
+                        type: string
+                      file:
+                        description: File names the dump inside the snapshot.
+                        pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$
+                        type: string
+                      podSelector:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          PodSelector picks the pod to run the command in, by label. Exactly the Running pods that have
+                          Container are candidates; the oldest is used.
+                        minProperties: 1
+                        type: object
+                      postCommand:
+                        description: |-
+                          PostCommand runs in the container after the dump, also when the dump failed — the place to
+                          release what PreCommand took.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      preCommand:
+                        description: |-
+                          PreCommand runs in the container before the dump and must exit 0 — the place to take a read
+                          lock or checkpoint. PostCommand runs no matter what the dump did, so a quiesce is always undone.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - command
+                    - file
+                    - podSelector
+                    type: object
                   files:
                     description: FilesSource snapshots a directory tree of a PVC (restic
                       backup, with exclude patterns).
@@ -371,6 +429,7 @@ spec:
                     - files
                     - sqlite
                     - postgres
+                    - command
                     type: string
                 required:
                 - type
@@ -382,9 +441,12 @@ spec:
                   rule: self.type != 'sqlite' || has(self.sqlite)
                 - message: source.postgres is required when type is postgres
                   rule: self.type != 'postgres' || has(self.postgres)
-                - message: set exactly one of files, sqlite, postgres
+                - message: source.command is required when type is command
+                  rule: self.type != 'command' || has(self.command)
+                - message: set exactly one of files, sqlite, postgres, command
                   rule: '(has(self.files) ? 1 : 0) + (has(self.sqlite) ? 1 : 0) +
-                    (has(self.postgres) ? 1 : 0) == 1'
+                    (has(self.postgres) ? 1 : 0) + (has(self.command) ? 1 : 0) ==
+                    1'
               storeRef:
                 description: StoreRef names a cluster-scoped BackupStore.
                 minLength: 1

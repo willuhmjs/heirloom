@@ -14,16 +14,17 @@ test:
 lint:
 	go vet ./...
 
-# Generate CRDs into config/crd and sync them into the chart.
+# Generate CRDs into config/crd and sync them into the chart and the binary.
 manifests:
 	go tool controller-gen crd paths=./api/... output:crd:artifacts:config=config/crd
 	$(MAKE) crds-chart
 
-# Helm installs crds/ only on first install and never upgrades it.
-# After changing the API, run this, then `kubectl apply -f charts/backshots/crds/` by hand.
+# Helm installs crds/ only on first install; the chart's install-crds hook job applies the copies
+# embedded in the image on every upgrade. Keep both copies in sync with the API.
 crds-chart:
-	mkdir -p $(CHART)/crds
+	mkdir -p $(CHART)/crds internal/crds/manifests
 	cp config/crd/*.yaml $(CHART)/crds/
+	cp config/crd/*.yaml internal/crds/manifests/
 
 docker-build:
 	docker build -t $(IMG) .

@@ -49,6 +49,15 @@ spec:
                 description: NFSSpec points at an NFS export that receives the restic
                   repositories.
                 properties:
+                  mountOptions:
+                    description: |-
+                      MountOptions are passed verbatim to the NFS mount on mover pods, e.g. ["nfsvers=4.1", "hard",
+                      "timeo=50"]. Without them the kubelet negotiates defaults; pin nfsvers when the export needs it.
+                    items:
+                      pattern: ^[A-Za-z0-9,.:=/_-]+$
+                      type: string
+                    maxItems: 10
+                    type: array
                   path:
                     description: Path of the export, e.g. /volume1/k8s-backup.
                     pattern: ^/.*

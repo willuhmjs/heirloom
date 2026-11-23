@@ -10,6 +10,6 @@ import (
 
 var (
 	GroupVersion  = schema.GroupVersion{Group: "backshots.io", Version: "v1alpha1"}
-	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
+	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion} //nolint:staticcheck // deprecated but still the kubebuilder-scaffolded registration helper, with no replacement
 	AddToScheme   = SchemeBuilder.AddToScheme
 )

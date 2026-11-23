@@ -1,0 +1,198 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: restores.backshots.io
+spec:
+  group: backshots.io
+  names:
+    kind: Restore
+    listKind: RestoreList
+    plural: restores
+    shortNames:
+    - brs
+    singular: restore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.policyRef
+      name: Policy
+      type: string
+    - jsonPath: .status.snapshot
+      name: From
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: RestoreSpec restores one policy's data from a snapshot. Create
+              it, watch status.phase.
+            properties:
+              activeDeadlineSeconds:
+                format: int64
+                type: integer
+              databases:
+                description: Databases restricts a postgres restore. Empty restores
+                  globals and every database.
+                items:
+                  type: string
+                type: array
+              delete:
+                description: Delete removes files in the target that are not in the
+                  snapshot (files restore).
+                type: boolean
+              from:
+                default: latest
+                description: |-
+                  From is "latest" or a restic snapshot id (8-64 hex characters, the short one in status.lastSnapshot.name).
+                  Default latest.
+                pattern: ^(latest|[0-9a-f]{8,64})$
+                type: string
+              paths:
+                description: Paths restricts a files restore to these sub-paths of
+                  the snapshot.
+                items:
+                  type: string
+                type: array
+              policyRef:
+                description: PolicyRef names a BackupPolicy in the same namespace.
+                minLength: 1
+                type: string
+              scaleDown:
+                description: |-
+                  ScaleDown workloads are scaled to zero before the restore and back afterwards.
+                  For postgres, list the apps using the database, not the database itself.
+                items:
+                  description: WorkloadRef names a Deployment or StatefulSet to stop
+                    during a restore.
+                  properties:
+                    kind:
+                      enum:
+                      - Deployment
+                      - StatefulSet
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                type: array
+              scaleUpOnFailure:
+                description: 'ScaleUpOnFailure brings workloads back even when the
+                  restore failed. Default false: leave them down.'
+                type: boolean
+              targetPVC:
+                description: TargetPVC overrides the PVC to restore into (files and
+                  sqlite); defaults to the policy's PVC.
+                type: string
+            required:
+            - policyRef
+            type: object
+          status:
+            properties:
+              completionTime:
+                format: date-time
+                type: string
+              message:
+                type: string
+              phase:
+                enum:
+                - Pending
+                - ScalingDown
+                - Running
+                - ScalingUp
+                - Succeeded
+                - Failed
+                type: string
+              scaled:
+                description: Scaled records the original replica counts so they can
+                  be put back.
+                items:
+                  properties:
+                    kind:
+                      enum:
+                      - Deployment
+                      - StatefulSet
+                      type: string
+                    name:
+                      type: string
+                    replicas:
+                      format: int32
+                      type: integer
+                  required:
+                  - kind
+                  - name
+                  - replicas
+                  type: object
+                type: array
+              scaledHPAs:
+                description: ScaledHPAs records the paused autoscalers' original bounds,
+                  for the same reason.
+                items:
+                  description: |-
+                    ScaledHPA records a HorizontalPodAutoscaler that a restore paused (min and max replicas to 0) so
+                    its autoscaling cannot scale the workload back up mid-restore; the recorded bounds are put back
+                    when the Restore finishes or is deleted.
+                  properties:
+                    maxReplicas:
+                      format: int32
+                      type: integer
+                    minReplicas:
+                      format: int32
+                      type: integer
+                    name:
+                      type: string
+                  required:
+                  - maxReplicas
+                  - minReplicas
+                  - name
+                  type: object
+                type: array
+              scalingDownSince:
+                description: ScalingDownSince is when the ScalingDown phase began;
+                  it bounds how long the controller waits for workloads to stop.
+                format: date-time
+                type: string
+              snapshot:
+                type: string
+              startTime:
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: name must be at most 40 characters (it is part of Job names)
+          rule: self.metadata.name.size() <= 40
+    served: true
+    storage: true
+    subresources:
+      status: {}

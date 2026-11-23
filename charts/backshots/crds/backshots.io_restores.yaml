@@ -152,6 +152,29 @@ spec:
                   - replicas
                   type: object
                 type: array
+              scaledHPAs:
+                description: ScaledHPAs records the paused autoscalers' original bounds,
+                  for the same reason.
+                items:
+                  description: |-
+                    ScaledHPA records a HorizontalPodAutoscaler that a restore paused (min and max replicas to 0) so
+                    its autoscaling cannot scale the workload back up mid-restore; the recorded bounds are put back
+                    when the Restore finishes or is deleted.
+                  properties:
+                    maxReplicas:
+                      format: int32
+                      type: integer
+                    minReplicas:
+                      format: int32
+                      type: integer
+                    name:
+                      type: string
+                  required:
+                  - maxReplicas
+                  - minReplicas
+                  - name
+                  type: object
+                type: array
               scalingDownSince:
                 description: ScalingDownSince is when the ScalingDown phase began;
                   it bounds how long the controller waits for workloads to stop.

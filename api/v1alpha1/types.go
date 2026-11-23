@@ -28,6 +28,12 @@ type NFSSpec struct {
 	// Path of the export, e.g. /volume1/k8s-backup.
 	// +kubebuilder:validation:Pattern=`^/.*`
 	Path string `json:"path"`
+	// MountOptions are passed verbatim to the NFS mount on mover pods, e.g. ["nfsvers=4.1", "hard",
+	// "timeo=50"]. Without them the kubelet negotiates defaults; pin nfsvers when the export needs it.
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9,.:=/_-]+$`
+	// +optional
+	MountOptions []string `json:"mountOptions,omitempty"`
 }
 
 // BackupStoreSpec describes where backups live.
@@ -57,13 +63,14 @@ type BackupStoreList struct {
 }
 
 // SourceType selects how data is captured.
-// +kubebuilder:validation:Enum=files;sqlite;postgres
+// +kubebuilder:validation:Enum=files;sqlite;postgres;command
 type SourceType string
 
 const (
 	SourceFiles    SourceType = "files"
 	SourceSQLite   SourceType = "sqlite"
 	SourcePostgres SourceType = "postgres"
+	SourceCommand  SourceType = "command"
 )
 
 // FilesSource snapshots a directory tree of a PVC (restic backup, with exclude patterns).
@@ -118,16 +125,49 @@ type PostgresSource struct {
 	UID int64 `json:"uid,omitempty"`
 }
 
-// Source selects exactly one of files, sqlite, postgres, matching Type.
+// CommandSource runs a command in a running pod and stores its stdout in the snapshot. This is how
+// databases backshots does not speak natively get consistent dumps: mysqldump, mongodump,
+// redis-cli --rdb - ... the command runs inside its own container, with its own tools, client version
+// and authentication. The dump lands in the snapshot as command/<file>; a restore writes it to a PVC
+// (restore.targetPVC) for the app's own import tool to load.
+type CommandSource struct {
+	// PodSelector picks the pod to run the command in, by label. Exactly the Running pods that have
+	// Container are candidates; the oldest is used.
+	// +kubebuilder:validation:MinProperties=1
+	PodSelector map[string]string `json:"podSelector"`
+	// Container inside the selected pod. Empty means its first container.
+	// +optional
+	Container string `json:"container,omitempty"`
+	// Command run inside the container; its stdout becomes the dump.
+	// +kubebuilder:validation:MinItems=1
+	Command []string `json:"command"`
+	// File names the dump inside the snapshot.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`
+	File string `json:"file"`
+	// PreCommand runs in the container before the dump and must exit 0 — the place to take a read
+	// lock or checkpoint. PostCommand runs no matter what the dump did, so a quiesce is always undone.
+	// +kubebuilder:validation:MinItems=1
+	// +optional
+	PreCommand []string `json:"preCommand,omitempty"`
+	// PostCommand runs in the container after the dump, also when the dump failed — the place to
+	// release what PreCommand took.
+	// +kubebuilder:validation:MinItems=1
+	// +optional
+	PostCommand []string `json:"postCommand,omitempty"`
+}
+
+// Source selects exactly one of files, sqlite, postgres or command, matching Type.
 // +kubebuilder:validation:XValidation:rule="self.type != 'files' || has(self.files)",message="source.files is required when type is files"
 // +kubebuilder:validation:XValidation:rule="self.type != 'sqlite' || has(self.sqlite)",message="source.sqlite is required when type is sqlite"
 // +kubebuilder:validation:XValidation:rule="self.type != 'postgres' || has(self.postgres)",message="source.postgres is required when type is postgres"
-// +kubebuilder:validation:XValidation:rule="(has(self.files) ? 1 : 0) + (has(self.sqlite) ? 1 : 0) + (has(self.postgres) ? 1 : 0) == 1",message="set exactly one of files, sqlite, postgres"
+// +kubebuilder:validation:XValidation:rule="self.type != 'command' || has(self.command)",message="source.command is required when type is command"
+// +kubebuilder:validation:XValidation:rule="(has(self.files) ? 1 : 0) + (has(self.sqlite) ? 1 : 0) + (has(self.postgres) ? 1 : 0) + (has(self.command) ? 1 : 0) == 1",message="set exactly one of files, sqlite, postgres, command"
 type Source struct {
 	Type     SourceType      `json:"type"`
 	Files    *FilesSource    `json:"files,omitempty"`
 	SQLite   *SQLiteSource   `json:"sqlite,omitempty"`
 	Postgres *PostgresSource `json:"postgres,omitempty"`
+	Command  *CommandSource  `json:"command,omitempty"`
 }
 
 // Verify periodically proves snapshots are restorable.
@@ -180,6 +220,11 @@ type BackupPolicySpec struct {
 	// Schedule is a cron expression.
 	// +kubebuilder:validation:MinLength=1
 	Schedule string `json:"schedule"`
+	// Jitter shifts every scheduled slot of this policy by a fixed, deterministic per-policy offset
+	// below Jitter (a duration like "15m"), so a hundred policies on "0 * * * *" do not all hit the
+	// NAS at :00. The offset is stable across runs; keep Jitter well under the schedule interval.
+	// +optional
+	Jitter string `json:"jitter,omitempty"`
 	// TimeZone is the IANA zone the schedules are evaluated in, for example America/New_York. Default UTC.
 	// Snapshot names and retention buckets are always UTC.
 	// +optional
@@ -315,13 +360,24 @@ type ScaledWorkload struct {
 	Replicas    int32 `json:"replicas"`
 }
 
+// ScaledHPA records a HorizontalPodAutoscaler that a restore paused (min and max replicas to 0) so
+// its autoscaling cannot scale the workload back up mid-restore; the recorded bounds are put back
+// when the Restore finishes or is deleted.
+type ScaledHPA struct {
+	Name        string `json:"name"`
+	MinReplicas int32  `json:"minReplicas"`
+	MaxReplicas int32  `json:"maxReplicas"`
+}
+
 type RestoreStatus struct {
 	Phase    RestorePhase `json:"phase,omitempty"`
 	Snapshot string       `json:"snapshot,omitempty"`
 	Message  string       `json:"message,omitempty"`
 	// Scaled records the original replica counts so they can be put back.
-	Scaled    []ScaledWorkload `json:"scaled,omitempty"`
-	StartTime *metav1.Time     `json:"startTime,omitempty"`
+	Scaled []ScaledWorkload `json:"scaled,omitempty"`
+	// ScaledHPAs records the paused autoscalers' original bounds, for the same reason.
+	ScaledHPAs []ScaledHPA  `json:"scaledHPAs,omitempty"`
+	StartTime  *metav1.Time `json:"startTime,omitempty"`
 	// ScalingDownSince is when the ScalingDown phase began; it bounds how long the controller waits for workloads to stop.
 	ScalingDownSince *metav1.Time `json:"scalingDownSince,omitempty"`
 	CompletionTime   *metav1.Time `json:"completionTime,omitempty"`

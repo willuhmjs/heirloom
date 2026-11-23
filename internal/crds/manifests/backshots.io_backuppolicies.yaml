@@ -1,0 +1,626 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: backuppolicies.backshots.io
+spec:
+  group: backshots.io
+  names:
+    kind: BackupPolicy
+    listKind: BackupPolicyList
+    plural: backuppolicies
+    shortNames:
+    - bp
+    singular: backuppolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.source.type
+      name: Type
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .status.lastSyncTime
+      name: Last
+      type: date
+    - jsonPath: .status.snapshotsKept
+      name: Snapshots
+      type: integer
+    - jsonPath: .status.lastVerify.ok
+      name: Verified
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Healthy")].status
+      name: Healthy
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BackupPolicySpec describes one thing to back up.
+            properties:
+              activeDeadlineSeconds:
+                description: |-
+                  ActiveDeadlineSeconds bounds one run. Default 3600. A first backup of a large volume may need much more:
+                  a run killed at the deadline leaves nothing behind and the next one starts again from zero.
+                format: int64
+                minimum: 1
+                type: integer
+              jitter:
+                description: |-
+                  Jitter shifts every scheduled slot of this policy by a fixed, deterministic per-policy offset
+                  below Jitter (a duration like "15m"), so a hundred policies on "0 * * * *" do not all hit the
+                  NAS at :00. The offset is stable across runs; keep Jitter well under the schedule interval.
+                type: string
+              minSourcePercent:
+                default: 50
+                description: |-
+                  MinSourcePercent aborts a run when the source holds fewer files than this percent of the previous
+                  snapshot (protects against an empty or recreated volume). 0 disables. Default 50.
+                format: int32
+                maximum: 100
+                minimum: 0
+                type: integer
+              pod:
+                description: PodOptions tunes the mover pods.
+                properties:
+                  imagePullSecrets:
+                    description: ImagePullSecrets for the mover and install images,
+                      for a private registry or mirror.
+                    items:
+                      description: |-
+                        LocalObjectReference contains enough information to let you locate the
+                        referenced object inside the same namespace.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  priorityClassName:
+                    type: string
+                  resources:
+                    description: ResourceRequirements describes the compute resource
+                      requirements.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  scratchSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: ScratchSize is the size of that ephemeral volume.
+                      Default 10Gi. Ignored for emptyDir.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  scratchStorageClassName:
+                    description: Scratch space for verify (restored database) as a
+                      generic ephemeral volume; emptyDir if unset.
+                    type: string
+                  tolerations:
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                type: object
+              retention:
+                description: Retention overrides the store default.
+                properties:
+                  daily:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  hourly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  monthly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  weekly:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: 'set at least one of hourly, daily, weekly, monthly (hourly:
+                    1 keeps only the newest snapshot)'
+                  rule: '(has(self.hourly) ? self.hourly : 0) + (has(self.daily) ?
+                    self.daily : 0) + (has(self.weekly) ? self.weekly : 0) + (has(self.monthly)
+                    ? self.monthly : 0) > 0'
+              schedule:
+                description: Schedule is a cron expression.
+                minLength: 1
+                type: string
+              source:
+                description: Source selects exactly one of files, sqlite, postgres
+                  or command, matching Type.
+                properties:
+                  command:
+                    description: |-
+                      CommandSource runs a command in a running pod and stores its stdout in the snapshot. This is how
+                      databases backshots does not speak natively get consistent dumps: mysqldump, mongodump,
+                      redis-cli --rdb - ... the command runs inside its own container, with its own tools, client version
+                      and authentication. The dump lands in the snapshot as command/<file>; a restore writes it to a PVC
+                      (restore.targetPVC) for the app's own import tool to load.
+                    properties:
+                      command:
+                        description: Command run inside the container; its stdout
+                          becomes the dump.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      container:
+                        description: Container inside the selected pod. Empty means
+                          its first container.
+                        type: string
+                      file:
+                        description: File names the dump inside the snapshot.
+                        pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$
+                        type: string
+                      podSelector:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          PodSelector picks the pod to run the command in, by label. Exactly the Running pods that have
+                          Container are candidates; the oldest is used.
+                        minProperties: 1
+                        type: object
+                      postCommand:
+                        description: |-
+                          PostCommand runs in the container after the dump, also when the dump failed — the place to
+                          release what PreCommand took.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      preCommand:
+                        description: |-
+                          PreCommand runs in the container before the dump and must exit 0 — the place to take a read
+                          lock or checkpoint. PostCommand runs no matter what the dump did, so a quiesce is always undone.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - command
+                    - file
+                    - podSelector
+                    type: object
+                  files:
+                    description: FilesSource snapshots a directory tree of a PVC (restic
+                      backup, with exclude patterns).
+                    properties:
+                      exclude:
+                        description: Exclude patterns passed to restic backup --exclude.
+                        items:
+                          type: string
+                        type: array
+                      pvc:
+                        minLength: 1
+                        type: string
+                      subPath:
+                        description: SubPath inside the PVC to back up. Defaults to
+                          the whole volume.
+                        type: string
+                    required:
+                    - pvc
+                    type: object
+                  postgres:
+                    description: PostgresSource dumps databases with pg_dump, run
+                      inside Image so the client always matches the server.
+                    properties:
+                      databases:
+                        description: Databases to dump. Empty means every non-template
+                          database.
+                        items:
+                          type: string
+                        type: array
+                      excludeDatabases:
+                        description: |-
+                          ExcludeDatabases are left out when databases is empty, for databases the backup user cannot dump
+                          (for example rdsadmin on a managed server) or that are not worth backing up.
+                        items:
+                          type: string
+                        type: array
+                      globals:
+                        default: full
+                        description: |-
+                          Globals selects the roles and tablespaces dump (pg_dumpall --globals-only). full needs a superuser, because
+                          it reads role passwords. no-role-passwords works for a least-privilege backup role; restored roles then have
+                          no password and need one set. skip leaves roles out entirely.
+                        enum:
+                        - full
+                        - no-role-passwords
+                        - skip
+                        type: string
+                      host:
+                        minLength: 1
+                        type: string
+                      image:
+                        description: Image whose pg_dump/psql/initdb match the server
+                          major version, e.g. postgres:16.
+                        minLength: 1
+                        type: string
+                      passwordSecretRef:
+                        description: SecretKeySelector selects a key of a Secret.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      port:
+                        default: 5432
+                        format: int32
+                        type: integer
+                      uid:
+                        default: 999
+                        description: UID postgres runs as inside Image during verify
+                          (debian images 999, alpine 70).
+                        format: int64
+                        type: integer
+                      user:
+                        default: postgres
+                        type: string
+                    required:
+                    - host
+                    - image
+                    - passwordSecretRef
+                    type: object
+                  sqlite:
+                    description: SQLiteSource takes consistent copies of SQLite databases
+                      with the online backup API.
+                    properties:
+                      paths:
+                        description: Paths of the database files, relative to the
+                          volume root.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      pvc:
+                        minLength: 1
+                        type: string
+                    required:
+                    - paths
+                    - pvc
+                    type: object
+                  type:
+                    description: SourceType selects how data is captured.
+                    enum:
+                    - files
+                    - sqlite
+                    - postgres
+                    - command
+                    type: string
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: source.files is required when type is files
+                  rule: self.type != 'files' || has(self.files)
+                - message: source.sqlite is required when type is sqlite
+                  rule: self.type != 'sqlite' || has(self.sqlite)
+                - message: source.postgres is required when type is postgres
+                  rule: self.type != 'postgres' || has(self.postgres)
+                - message: source.command is required when type is command
+                  rule: self.type != 'command' || has(self.command)
+                - message: set exactly one of files, sqlite, postgres, command
+                  rule: '(has(self.files) ? 1 : 0) + (has(self.sqlite) ? 1 : 0) +
+                    (has(self.postgres) ? 1 : 0) + (has(self.command) ? 1 : 0) ==
+                    1'
+              storeRef:
+                description: StoreRef names a cluster-scoped BackupStore.
+                minLength: 1
+                type: string
+              suspend:
+                type: boolean
+              timeZone:
+                description: |-
+                  TimeZone is the IANA zone the schedules are evaluated in, for example America/New_York. Default UTC.
+                  Snapshot names and retention buckets are always UTC.
+                type: string
+              trigger:
+                description: Trigger runs extra backups on demand.
+                properties:
+                  manual:
+                    description: 'Manual: change this string to start one backup now.
+                      status.lastManualSync is set to it when that run succeeds.'
+                    type: string
+                type: object
+              verify:
+                description: Verify periodically proves snapshots are restorable.
+                properties:
+                  database:
+                    description: |-
+                      Database the SQL assertions run against. Required when sql is set and the policy does not list
+                      exactly one database (the default then).
+                    type: string
+                  schedule:
+                    description: Schedule (cron) of the restore test.
+                    type: string
+                  sql:
+                    description: |-
+                      SQL assertions for postgres: each statement must return the single value "t".
+                      Example: SELECT count(*) > 100 FROM users
+                    items:
+                      type: string
+                    type: array
+                required:
+                - schedule
+                type: object
+            required:
+            - schedule
+            - source
+            - storeRef
+            type: object
+          status:
+            properties:
+              conditions:
+                description: 'Conditions: Ready (store resolved, workload rendered)
+                  and Healthy (last run succeeded).'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastManualSync:
+                type: string
+              lastScheduleTime:
+                description: |-
+                  LastScheduleTime and LastVerifyScheduleTime record when the controller last started a scheduled
+                  backup or verify run. The next run is due at the first schedule time after them.
+                format: date-time
+                type: string
+              lastSnapshot:
+                description: SnapshotInfo describes one snapshot directory.
+                properties:
+                  bytes:
+                    format: int64
+                    type: integer
+                  files:
+                    format: int64
+                    type: integer
+                  name:
+                    type: string
+                  time:
+                    format: date-time
+                    type: string
+                required:
+                - name
+                - time
+                type: object
+              lastSyncDuration:
+                type: string
+              lastSyncStartTime:
+                format: date-time
+                type: string
+              lastSyncTime:
+                format: date-time
+                type: string
+              lastVerify:
+                description: VerifyStatus is the result of the latest verify run.
+                properties:
+                  message:
+                    type: string
+                  ok:
+                    type: boolean
+                  snapshot:
+                    type: string
+                  time:
+                    format: date-time
+                    type: string
+                required:
+                - ok
+                - time
+                type: object
+              lastVerifyScheduleTime:
+                format: date-time
+                type: string
+              nextSyncTime:
+                format: date-time
+                type: string
+              snapshotsKept:
+                description: SnapshotsKept is the number of snapshots retained after
+                  the last run.
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: name must be at most 40 characters (it is part of Job names)
+          rule: self.metadata.name.size() <= 40
+    served: true
+    storage: true
+    subresources:
+      status: {}
