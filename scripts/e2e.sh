@@ -87,7 +87,11 @@ web() { k -n $NS exec deploy/web -- sh -c "$1"; }
 step "Cluster, NFS server, operator"
 docker build -q -t "$IMAGE" . >/dev/null
 kind create cluster --name "$CLUSTER" --wait 120s >/dev/null
-kind load docker-image "$IMAGE" --name "$CLUSTER" >/dev/null
+# Import through ctr instead of `kind load docker-image`: Docker 28's containerd image store
+# makes `docker save` emit an OCI layout that kind's loader rejects ("Image Loading Failed").
+for node in $(kind get nodes --name "$CLUSTER"); do
+  docker save "$IMAGE" | docker exec -i "$node" ctr -n k8s.io images import - >/dev/null
+done
 docker build -q -t "$NFS" scripts/e2e/nfs >/dev/null
 docker volume create "$NFS-data" >/dev/null
 docker rm -f "$NFS" >/dev/null 2>&1 || true
