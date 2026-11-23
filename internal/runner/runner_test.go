@@ -45,30 +45,6 @@ func TestCleanRel(t *testing.T) {
 	}
 }
 
-func TestSelectSnapshot(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := selectSnapshot(dir, "latest"); err == nil {
-		t.Error("empty dir should fail")
-	}
-	for _, n := range []string{"2026-01-01T00-00-00Z", "2026-01-03T00-00-00Z", "2026-01-02T00-00-00Z", ".incomplete-2026-01-09T00-00-00Z", "junk"} {
-		mkdir(t, dir, n)
-	}
-	if got, err := selectSnapshot(dir, "latest"); err != nil || got != "2026-01-03T00-00-00Z" {
-		t.Errorf("latest = %q, %v", got, err)
-	}
-	if got, err := selectSnapshot(dir, ""); err != nil || got != "2026-01-03T00-00-00Z" {
-		t.Errorf("empty = %q, %v", got, err)
-	}
-	if got, err := selectSnapshot(dir, "2026-01-02T00-00-00Z"); err != nil || got != "2026-01-02T00-00-00Z" {
-		t.Errorf("named = %q, %v", got, err)
-	}
-	for _, bad := range []string{"2026-01-09T00-00-00Z", "../x", ".incomplete-2026-01-09T00-00-00Z", "junk", "2026-01-01T00-00-00Z/.."} {
-		if _, err := selectSnapshot(dir, bad); err == nil {
-			t.Errorf("selectSnapshot(%q) should fail", bad)
-		}
-	}
-}
-
 func TestCheckGuard(t *testing.T) {
 	cases := []struct {
 		files, prev int64
@@ -86,48 +62,6 @@ func TestCheckGuard(t *testing.T) {
 		if err := checkGuard(c.files, c.prev, c.pct); (err != nil) != c.fail {
 			t.Errorf("%+v: err=%v", c, err)
 		}
-	}
-}
-
-func TestCleanIncomplete(t *testing.T) {
-	dir := t.TempDir()
-	old := mkdir(t, dir, ".incomplete-2026-01-01T00-00-00Z")
-	fresh := mkdir(t, dir, ".incomplete-2026-01-02T00-00-00Z")
-	done := mkdir(t, dir, "2026-01-01T00-00-00Z")
-	past := time.Now().Add(-48 * time.Hour)
-	os.Chtimes(old, past, past)
-	os.Chtimes(done, past, past)
-	removed, err := cleanIncomplete(dir, time.Now(), 24*time.Hour)
-	if err != nil || len(removed) != 1 {
-		t.Fatalf("removed=%v err=%v", removed, err)
-	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Error("old incomplete dir should be gone")
-	}
-	for _, p := range []string{fresh, done} {
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("%s should remain", p)
-		}
-	}
-}
-
-func TestPrune(t *testing.T) {
-	dir := t.TempDir()
-	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ { // ten daily snapshots
-		mkdir(t, dir, snapshot.Name(start.AddDate(0, 0, i)))
-	}
-	mkdir(t, dir, ".incomplete-x")
-	kept, pruned, err := prune(dir, snapshot.Retention{Daily: 3})
-	if err != nil || kept != 3 || pruned != 7 {
-		t.Fatalf("kept=%d pruned=%d err=%v", kept, pruned, err)
-	}
-	names, _ := listSnapshots(dir)
-	if len(names) != 3 || names[2] != "2026-01-10T00-00-00Z" {
-		t.Errorf("names = %v", names)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".incomplete-x")); err != nil {
-		t.Error("prune must not touch incomplete dirs")
 	}
 }
 
@@ -160,19 +94,7 @@ func TestExecuteFailureWritesResult(t *testing.T) {
 	}
 }
 
-func TestStatusRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	in := snapshot.Status{Snapshot: "s", Type: "files", Time: time.Unix(100, 0).UTC(), Files: 2, Bytes: 9, Items: []string{"data"}}
-	if err := writeStatus(dir, in); err != nil {
-		t.Fatal(err)
-	}
-	out, err := readStatus(dir)
-	if err != nil || out.Files != 2 || out.Items[0] != "data" || !out.Time.Equal(in.Time) {
-		t.Errorf("%+v %v", out, err)
-	}
-}
-
-// ---- integration tests (need rsync / sqlite3) ----
+// ---- integration tests (need restic / sqlite3) ----
 
 func need(t *testing.T, bin string) {
 	t.Helper()
@@ -181,7 +103,8 @@ func need(t *testing.T, bin string) {
 	}
 }
 
-// testRunner builds a runner on temp dirs; the clock advances one hour per call so snapshot names differ.
+// testRunner builds a runner on temp dirs, including the scratch mount restic caches and stages restores
+// through; the clock advances one hour per call so run timestamps differ.
 func testRunner(t *testing.T, mode jobcfg.Mode, spec v1alpha1.BackupPolicySpec) *runner {
 	t.Helper()
 	root := t.TempDir()
@@ -202,184 +125,90 @@ func (r *runner) as(mode jobcfg.Mode, rs *jobcfg.Restore) *runner {
 	return &c
 }
 
-func inode(t *testing.T, p string) uint64 {
-	t.Helper()
-	info, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Sys().(*syscall.Stat_t).Ino
-}
-
-func TestFilesBackupVerifyRestore(t *testing.T) {
-	need(t, "rsync")
-	if _, _, err := run(t.Context(), proc{}, "rsync", "-A", "--version"); err != nil {
-		old := rsyncArchive
-		rsyncArchive = "-aH" // no ACL/xattr support here
-		t.Cleanup(func() { rsyncArchive = old })
-	}
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		MinSourcePercent: 50,
-		Source:           v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x", Exclude: []string{"*.tmp"}}},
-	})
-	write(t, filepath.Join(r.source, "a.txt"), "aaa")
-	write(t, filepath.Join(r.source, "sub/b.txt"), "bbbb")
-	write(t, filepath.Join(r.source, "skip.tmp"), "zzz")
-
-	res1 := r.execute(t.Context())
-	if !res1.OK {
-		t.Fatal(res1.Message)
-	}
-	if res1.Files != 2 || res1.Bytes != 7 {
-		t.Errorf("res1 = %+v", res1)
-	}
-	write(t, filepath.Join(r.source, "sub/b.txt"), "BBBBB")
-	res2 := r.execute(t.Context())
-	if !res2.OK {
-		t.Fatal(res2.Message)
-	}
-	s1, s2 := filepath.Join(r.policyDir, res1.Snapshot, "data"), filepath.Join(r.policyDir, res2.Snapshot, "data")
-	if inode(t, filepath.Join(s1, "a.txt")) != inode(t, filepath.Join(s2, "a.txt")) {
-		t.Error("unchanged file should be hardlinked between snapshots")
-	}
-	if inode(t, filepath.Join(s1, "sub/b.txt")) == inode(t, filepath.Join(s2, "sub/b.txt")) {
-		t.Error("changed file must not share an inode")
-	}
-	if _, err := os.Stat(filepath.Join(s2, "skip.tmp")); err == nil {
-		t.Error("excluded file was copied")
-	}
-
-	if v := r.as(jobcfg.ModeVerify, nil).execute(t.Context()); !v.OK || v.Snapshot != res2.Snapshot {
-		t.Errorf("verify: %+v", v)
-	}
-
-	// Guard: an emptied source must not produce a snapshot.
-	os.RemoveAll(filepath.Join(r.source, "sub"))
-	os.Remove(filepath.Join(r.source, "a.txt"))
-	if g := r.execute(t.Context()); g.OK {
-		t.Error("empty source should be refused")
-	}
-	if names, _ := listSnapshots(r.policyDir); len(names) != 2 {
-		t.Errorf("snapshots = %v", names)
-	}
-	ents, _ := os.ReadDir(r.policyDir)
-	for _, e := range ents {
-		if snapshot.IsIncomplete(e.Name()) {
-			t.Errorf("leftover %s", e.Name())
-		}
-	}
-
-	// Restore the older snapshot, deleting extras.
-	write(t, filepath.Join(r.source, "extra.txt"), "x")
-	rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: res1.Snapshot, Delete: true}).execute(t.Context())
-	if !rr.OK {
-		t.Fatal(rr.Message)
-	}
-	if b, _ := os.ReadFile(filepath.Join(r.source, "sub/b.txt")); string(b) != "bbbb" {
-		t.Errorf("restored b.txt = %q", b)
-	}
-	if _, err := os.Stat(filepath.Join(r.source, "extra.txt")); err == nil {
-		t.Error("--delete should remove extra.txt")
-	}
-
-	// Path-filtered restore and traversal rejection.
-	os.Remove(filepath.Join(r.source, "a.txt"))
-	if rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Paths: []string{"a.txt"}}).execute(t.Context()); !rr.OK {
-		t.Fatal(rr.Message)
-	}
-	if _, err := os.Stat(filepath.Join(r.source, "a.txt")); err != nil {
-		t.Error("a.txt not restored")
-	}
-	if rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Paths: []string{"../etc"}}).execute(t.Context()); rr.OK {
-		t.Error("traversal should fail")
-	}
-}
-
-func TestFilesRestoreHonorsSubPath(t *testing.T) {
-	need(t, "rsync")
-	if _, _, err := run(t.Context(), proc{}, "rsync", "-A", "--version"); err != nil {
-		old := rsyncArchive
-		rsyncArchive = "-aH" // no ACL/xattr support here
-		t.Cleanup(func() { rsyncArchive = old })
-	}
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x", SubPath: "git"}},
-	})
-	write(t, filepath.Join(r.source, "git/a.txt"), "A")
-	write(t, filepath.Join(r.source, "other/keep.txt"), "K")
-
-	res := r.execute(t.Context())
-	if !res.OK {
-		t.Fatal(res.Message)
-	}
-
-	t.Run("whole snapshot", func(t *testing.T) {
-		os.Remove(filepath.Join(r.source, "git/a.txt"))
-		rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Delete: true}).execute(t.Context())
-		if !rr.OK {
-			t.Fatal(rr.Message)
-		}
-		if b, _ := os.ReadFile(filepath.Join(r.source, "git/a.txt")); string(b) != "A" {
-			t.Errorf("restored git/a.txt = %q", b)
-		}
-		if b, err := os.ReadFile(filepath.Join(r.source, "other/keep.txt")); err != nil || string(b) != "K" {
-			t.Errorf("--delete outside subPath clobbered other/keep.txt: %q, %v", b, err)
-		}
-		if _, err := os.Stat(filepath.Join(r.source, "a.txt")); err == nil {
-			t.Error("file restored to volume root instead of subPath")
-		}
-	})
-
-	t.Run("paths", func(t *testing.T) {
-		os.Remove(filepath.Join(r.source, "git/a.txt"))
-		rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Paths: []string{"a.txt"}}).execute(t.Context())
-		if !rr.OK {
-			t.Fatal(rr.Message)
-		}
-		if b, _ := os.ReadFile(filepath.Join(r.source, "git/a.txt")); string(b) != "A" {
-			t.Errorf("restored git/a.txt = %q", b)
-		}
-	})
-}
-
+// Full round trip for a sqlite source on the restic engine: backup stages consistent copies under
+// .staging and commits them to the repository (which it then removes), verify runs integrity_check on
+// the snapshot through the real decode path, and restore rewrites the volume even against stale
+// sidecars — preserving the mode of the database it replaces.
 func TestSQLiteBackupVerifyRestore(t *testing.T) {
 	need(t, "sqlite3")
+	requireRestic(t)
+	ctx := t.Context()
 	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"db/app.db"}}},
+		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"db/app.db", "other.db"}}},
 	})
+	sq := func(p, q string) string {
+		t.Helper()
+		out, _, err := run(ctx, proc{env: os.Environ()}, "sqlite3", p, q)
+		if err != nil {
+			t.Fatalf("sqlite3 %s: %v", q, err)
+		}
+		return strings.TrimSpace(out)
+	}
 	mkdir(t, r.source, "db")
 	db := filepath.Join(r.source, "db/app.db")
-	if _, _, err := run(t.Context(), proc{env: os.Environ()}, "sqlite3", db, "create table t(v); insert into t values('one');"); err != nil {
+	other := filepath.Join(r.source, "other.db")
+	sq(db, "create table t(v); insert into t values('one');")
+	sq(other, "create table t(v); insert into t values('one');")
+
+	var res jobcfg.Result
+	if err := r.backup(ctx, &res); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if res.Files != 2 {
+		t.Errorf("snapshot has %d files, want the 2 databases", res.Files)
+	}
+	if _, err := os.Stat(filepath.Join(r.policyDir, stagingDirName)); !os.IsNotExist(err) {
+		t.Error("the staging tree survived the backup")
+	}
+	if fi, err := os.Stat(r.resticRepo()); err != nil || !fi.IsDir() {
+		t.Errorf("restic repository missing: %v", err)
+	}
+
+	v := newVerifyRunner(t, r)
+	v.cfg.Mode, v.cfg.Restore = jobcfg.ModeVerify, nil
+	var vres jobcfg.Result
+	if err := v.verify(ctx, &vres); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !strings.Contains(vres.Message, "integrity_check") {
+		t.Errorf("verify message = %q", vres.Message)
+	}
+
+	// The volume drifts, loses a database, and grows stale sidecars before the restore.
+	sq(db, "insert into t values('two');")
+	if err := os.Chmod(db, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res := r.execute(t.Context())
-	if !res.OK || res.Files != 1 {
-		t.Fatalf("backup: %+v", res)
-	}
-	if v := r.as(jobcfg.ModeVerify, nil).execute(t.Context()); !v.OK {
-		t.Fatalf("verify: %+v", v)
-	}
-	// Change the db, add stale wal/shm, restore.
-	os.Chmod(db, 0o600)
-	run(t.Context(), proc{env: os.Environ()}, "sqlite3", db, "insert into t values('two');")
 	write(t, db+"-wal", "stale")
 	write(t, db+"-shm", "stale")
-	if rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest"}).execute(t.Context()); !rr.OK {
-		t.Fatalf("restore: %+v", rr)
+	write(t, other+"-journal", "stale")
+	os.Remove(other)
+
+	r.cfg.Mode = jobcfg.ModeRestore
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	if err := r.restore(ctx, &jobcfg.Result{}); err != nil {
+		t.Fatalf("restore: %v", err)
 	}
-	out, _, err := run(t.Context(), proc{env: os.Environ()}, "sqlite3", db, "select count(*) from t")
-	if err != nil || strings.TrimSpace(out) != "1" {
-		t.Errorf("count = %q, %v", out, err)
+	if got := sq(db, "select count(*) from t"); got != "1" {
+		t.Errorf("count after restore = %q, want 1", got)
 	}
-	for _, s := range []string{"-wal", "-shm"} {
+	if got := sq(other, "select v from t"); got != "one" {
+		t.Errorf("restored other.db = %q, want one", got)
+	}
+	for _, s := range []string{"-wal", "-shm", "-journal"} {
 		if _, err := os.Stat(db + s); err == nil {
-			t.Errorf("%s not removed", s)
+			t.Errorf("stale %s survived the restore", s)
+		}
+		if _, err := os.Stat(other + s); err == nil {
+			t.Errorf("stale %s survived the restore", s)
 		}
 	}
 	if info, _ := os.Stat(db); info.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %v", info.Mode())
+		t.Errorf("restored db mode = %v, want the replaced file's 0600", info.Mode())
 	}
-	if rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Paths: []string{"../x"}}).execute(t.Context()); rr.OK {
+
+	r.cfg.Restore = &jobcfg.Restore{From: "latest", Paths: []string{"../x"}}
+	if err := r.restore(ctx, &jobcfg.Result{}); err == nil {
 		t.Error("traversal should fail")
 	}
 }
@@ -456,7 +285,9 @@ func TestVerifyDatabaseIsNeverGuessed(t *testing.T) {
 	}
 }
 
-// A symlink planted in a user-writable volume must not let a backup or restore touch anything outside it.
+// A symlink planted in a user-writable volume must not let a backup or restore touch anything outside
+// it. The restic engine's containment lives in sourceRoot (files), captureSQLite (staging) and
+// restoreSQLite (destination); each gate is exercised directly so this holds without a repository.
 func TestSymlinkEscapeIsRefused(t *testing.T) {
 	outside := mkdir(t, t.TempDir(), "other-namespace-backups")
 	write(t, filepath.Join(outside, "secret.db"), "secret")
@@ -468,42 +299,42 @@ func TestSymlinkEscapeIsRefused(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
 			t.Fatal(err)
 		}
-		res := r.execute(t.Context())
-		if res.OK || !strings.Contains(res.Message, "outside its volume") {
-			t.Fatalf("symlinked subPath accepted: %+v", res)
-		}
-		if names, _ := listSnapshots(r.policyDir); len(names) != 0 {
-			t.Fatalf("a snapshot was created: %v", names)
+		if _, err := r.sourceRoot(); err == nil || !strings.Contains(err.Error(), "outside its volume") {
+			t.Fatalf("symlinked subPath accepted: %v", err)
 		}
 	})
 
-	t.Run("sqlite path", func(t *testing.T) {
+	t.Run("sqlite staging", func(t *testing.T) {
 		r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
 			Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
 		})
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
 			t.Fatal(err)
 		}
-		res := r.execute(t.Context())
-		if res.OK || !strings.Contains(res.Message, "outside its volume") {
-			t.Fatalf("symlinked sqlite path accepted: %+v", res)
+		stage, err := r.beginStaging()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.captureSQLite(t.Context(), stage); err == nil || !strings.Contains(err.Error(), "outside its volume") {
+			t.Fatalf("symlinked sqlite path accepted: %v", err)
 		}
 	})
 
 	t.Run("restore destination", func(t *testing.T) {
 		r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
-			Source: v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x"}},
+			Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
 		})
-		snap := filepath.Join(r.policyDir, "2026-01-01T00-00-00Z")
-		write(t, filepath.Join(snap, "data", "link", "evil"), "payload")
+		r.cfg.Restore = &jobcfg.Restore{From: "latest"}
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
 			t.Fatal(err)
 		}
-		res := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Paths: []string{"link/evil"}}).execute(t.Context())
-		if res.OK {
-			t.Fatalf("restore through a symlink succeeded: %+v", res)
+		// Hand-build what stageSnapshot would have materialized from the snapshot.
+		stage := mkdir(t, r.scratch, "restic-restore")
+		write(t, filepath.Join(stage, "sqlite", "link", "secret.db"), "payload")
+		if err := r.restoreSQLite(stage); err == nil {
+			t.Fatal("restore through a symlink succeeded")
 		}
-		if _, err := os.Stat(filepath.Join(outside, "evil")); err == nil {
+		if b, _ := os.ReadFile(filepath.Join(outside, "secret.db")); string(b) == "payload" {
 			t.Fatal("restore wrote outside the volume")
 		}
 	})
@@ -532,128 +363,25 @@ func TestSQLiteCheckWorksOnReadOnlyWALCopy(t *testing.T) {
 	}
 }
 
-func TestRsyncMissingSourceIsAFailure(t *testing.T) {
-	need(t, "rsync")
-	dst := t.TempDir()
-	if err := rsync(t.Context(), []string{"-a", "/nonexistent-backshots-path/", dst + "/"}); err == nil {
-		t.Fatal("rsync with a missing source must fail, not be treated as success")
-	}
-}
-
-func TestRsyncFlags(t *testing.T) {
-	if got := rsyncFlags(true); got != "-aH" {
-		t.Errorf("rsyncFlags(true) = %q", got)
-	}
-	if got := rsyncFlags(false); got != rsyncArchive {
-		t.Errorf("rsyncFlags(false) = %q, want %q", got, rsyncArchive)
-	}
-}
-
-func TestRestoreDeleteKeepsBackupExcludes(t *testing.T) {
-	need(t, "rsync")
-	if _, _, err := run(t.Context(), proc{}, "rsync", "-A", "--version"); err != nil {
-		old := rsyncArchive
-		rsyncArchive = "-aH" // no ACL/xattr support here
-		t.Cleanup(func() { rsyncArchive = old })
-	}
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x", Exclude: []string{"cache"}}},
-	})
-	write(t, filepath.Join(r.source, "a.txt"), "A")
-	write(t, filepath.Join(r.source, "cache/c.tmp"), "C")
-	if res := r.execute(t.Context()); !res.OK {
-		t.Fatal(res.Message)
-	}
-	write(t, filepath.Join(r.source, "junk.txt"), "J") // not in the snapshot and not excluded
-	rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest", Delete: true}).execute(t.Context())
-	if !rr.OK {
-		t.Fatal(rr.Message)
-	}
-	if _, err := os.Stat(filepath.Join(r.source, "cache/c.tmp")); err != nil {
-		t.Errorf("restore --delete removed a path the backup excludes: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(r.source, "junk.txt")); err == nil {
-		t.Error("restore --delete should remove files that are neither in the snapshot nor excluded")
-	}
-}
-
-// An interrupted prune must never leave a half-deleted directory that still looks like a snapshot.
-func TestPruneRenamesBeforeDeletingAndSweepsLeftovers(t *testing.T) {
-	dir := t.TempDir()
-	old := "2026-01-01T00-00-00Z"
-	newer := "2026-01-02T00-00-00Z"
-	for _, n := range []string{old, newer} {
-		write(t, filepath.Join(dir, n, "data", "f"), n)
-		write(t, filepath.Join(dir, n, snapshot.StatusFile), "{}")
-	}
-	// Left behind by a prune that died after the rename but before the delete.
-	write(t, filepath.Join(dir, snapshot.DeletingPrefix+"2025-12-31T00-00-00Z", "data", "f"), "x")
-
-	kept, pruned, err := prune(dir, snapshot.Retention{Daily: 1})
-	if err != nil || kept != 1 || pruned != 1 {
-		t.Fatalf("kept=%d pruned=%d err=%v", kept, pruned, err)
-	}
-	ents, _ := os.ReadDir(dir)
-	if len(ents) != 1 || ents[0].Name() != newer {
-		var names []string
-		for _, e := range ents {
-			names = append(names, e.Name())
-		}
-		t.Fatalf("left in dir: %v, want only %s", names, newer)
-	}
-}
-
-// A prune problem after a published snapshot must not fail the run.
-func TestBackupSucceedsWhenPruneFails(t *testing.T) {
-	need(t, "sqlite3")
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
-	})
-	if out, err := exec.Command("sqlite3", filepath.Join(r.source, "a.db"), "create table t(x); insert into t values (1);").CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	if res := r.execute(t.Context()); !res.OK {
-		t.Fatal(res.Message)
-	}
-	// Make the old snapshot undeletable by planting a non-empty directory the process cannot remove.
-	if os.Geteuid() == 0 {
-		t.Skip("root can remove anything")
-	}
-	names, _ := listSnapshots(r.policyDir)
-	locked := filepath.Join(r.policyDir, names[0], "locked")
-	write(t, filepath.Join(locked, "f"), "x")
-	if err := os.Chmod(locked, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	// The locked directory is renamed along with its snapshot, so re-enable permissions recursively.
-	t.Cleanup(func() { exec.Command("chmod", "-R", "u+rwx", r.policyDir).Run() })
-	r.cfg.Retention = snapshot.Retention{Hourly: 1}
-	res := r.execute(t.Context())
-	if !res.OK || !strings.Contains(res.Message, "warning") {
-		t.Fatalf("a prune failure must be a warning, not a failed run: %+v", res)
-	}
-}
-
 // A rollback journal left by the old database is "hot" for the restored file: SQLite would roll it back
 // onto the restored data. It must be removed like -wal and -shm.
 func TestSQLiteRestoreRemovesAllStaleSidecars(t *testing.T) {
-	need(t, "sqlite3")
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
+	r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
 		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
 	})
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	stage := mkdir(t, r.scratch, "restic-restore")
+	write(t, filepath.Join(stage, "sqlite", "a.db"), "the committed database")
 	db := filepath.Join(r.source, "a.db")
-	if out, err := exec.Command("sqlite3", db, "create table t(x); insert into t values (1);").CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	if res := r.execute(t.Context()); !res.OK {
-		t.Fatal(res.Message)
-	}
+	write(t, db, "the drifted database")
 	for _, s := range []string{"-wal", "-shm", "-journal"} {
 		write(t, db+s, "stale")
 	}
-	rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest"}).execute(t.Context())
-	if !rr.OK {
-		t.Fatal(rr.Message)
+	if err := r.restoreSQLite(stage); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(db); string(b) != "the committed database" {
+		t.Errorf("restored db = %q", b)
 	}
 	for _, s := range []string{"-wal", "-shm", "-journal"} {
 		if _, err := os.Stat(db + s); err == nil {
@@ -667,23 +395,17 @@ func TestSQLiteRestoreIntoNewVolumeInheritsDirectoryOwner(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to create files owned by another user")
 	}
-	need(t, "sqlite3")
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
+	r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
 		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
 	})
-	if out, err := exec.Command("sqlite3", filepath.Join(r.source, "a.db"), "create table t(x);").CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	if res := r.execute(t.Context()); !res.OK {
-		t.Fatal(res.Message)
-	}
-	os.Remove(filepath.Join(r.source, "a.db"))
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	stage := mkdir(t, r.scratch, "restic-restore")
+	write(t, filepath.Join(stage, "sqlite", "a.db"), "the committed database")
 	if err := os.Chown(r.source, 1234, 1234); err != nil {
 		t.Fatal(err)
 	}
-	rr := r.as(jobcfg.ModeRestore, &jobcfg.Restore{From: "latest"}).execute(t.Context())
-	if !rr.OK {
-		t.Fatal(rr.Message)
+	if err := r.restoreSQLite(stage); err != nil {
+		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(r.source, "a.db"))
 	if err != nil {
@@ -729,75 +451,6 @@ func TestDumpGzipFailsFastWhenDestinationFails(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("dumpGzip hung after the destination failed")
-	}
-}
-
-// A first backup too big for one deadline must still finish: the next run adopts the unfinished tree and
-// rsync skips what is already there instead of copying everything again.
-func TestFilesBackupResumesAnUnfinishedRun(t *testing.T) {
-	need(t, "rsync")
-	if _, _, err := run(t.Context(), proc{}, "rsync", "-A", "--version"); err != nil {
-		old := rsyncArchive
-		rsyncArchive = "-aH" // no ACL/xattr support here
-		t.Cleanup(func() { rsyncArchive = old })
-	}
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x"}},
-	})
-	write(t, filepath.Join(r.source, "big.bin"), "already copied")
-	write(t, filepath.Join(r.source, "late.txt"), "not copied yet")
-
-	// What a run killed at its deadline leaves behind: one file transferred (same size and mtime), one not.
-	partial := filepath.Join(r.policyDir, snapshot.IncompletePrefix+"2026-01-01T00-00-00Z")
-	if err := os.MkdirAll(filepath.Join(partial, "data"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("cp", "-p", filepath.Join(r.source, "big.bin"), filepath.Join(partial, "data", "big.bin")).CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	write(t, filepath.Join(partial, "data", "stale.txt"), "no longer in the source")
-	ino := inode(t, filepath.Join(partial, "data", "big.bin"))
-
-	res := r.execute(t.Context())
-	if !res.OK {
-		t.Fatal(res.Message)
-	}
-	snap := filepath.Join(r.policyDir, res.Snapshot, "data")
-	if got := inode(t, filepath.Join(snap, "big.bin")); got != ino {
-		t.Error("the file already in the partial tree was copied again instead of being reused")
-	}
-	if b, _ := os.ReadFile(filepath.Join(snap, "late.txt")); string(b) != "not copied yet" {
-		t.Error("the missing file was not transferred")
-	}
-	if _, err := os.Stat(filepath.Join(snap, "stale.txt")); err == nil {
-		t.Error("a file that is no longer in the source survived in the snapshot")
-	}
-	if _, err := os.Stat(partial); err == nil {
-		t.Error("the partial directory was not consumed")
-	}
-}
-
-// An interrupted run's tree is kept for resuming, but one that failed the empty-source check is not.
-func TestFailedFilesRunKeepsPartialUnlessGuardTripped(t *testing.T) {
-	need(t, "rsync")
-	if _, _, err := run(t.Context(), proc{}, "rsync", "-A", "--version"); err != nil {
-		old := rsyncArchive
-		rsyncArchive = "-aH" // no ACL/xattr support here
-		t.Cleanup(func() { rsyncArchive = old })
-	}
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		MinSourcePercent: 50,
-		Source:           v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x"}},
-	})
-	// The guard trips on an empty source: no partial tree may be left to resume from.
-	if res := r.execute(t.Context()); res.OK {
-		t.Fatal("an empty source must fail")
-	}
-	ents, _ := os.ReadDir(r.policyDir)
-	for _, e := range ents {
-		if snapshot.IsIncomplete(e.Name()) {
-			t.Errorf("guard failure left %s behind", e.Name())
-		}
 	}
 }
 

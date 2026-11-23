@@ -29,13 +29,14 @@ func testDeployment(annotations map[string]string) *appsv1.Deployment {
 }
 
 func testRestore(mutate func(*v1alpha1.Restore)) *v1alpha1.Restore {
+	// Paths and delete exclude each other (delete+paths is rejected for every policy), so the fixture
+	// restricts by path only.
 	rs := &v1alpha1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "apps", UID: "uid-r"},
 		Spec: v1alpha1.RestoreSpec{
 			PolicyRef: "app",
 			From:      "latest",
 			Paths:     []string{"conf"},
-			Delete:    true,
 			ScaleDown: []v1alpha1.WorkloadRef{{Kind: "Deployment", Name: "web"}},
 		},
 	}
@@ -127,11 +128,17 @@ func TestRestoreHappyPath(t *testing.T) {
 	if !pod.Volumes[1].NFS.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ReadOnly || pod.Volumes[2].PersistentVolumeClaim.ClaimName != "app-data" {
 		t.Errorf("volumes = %+v", pod.Volumes)
 	}
+	if vol := volume(pod, "scratch"); vol == nil || vol.EmptyDir == nil || mount(pod.Containers[0], "scratch").MountPath != "/scratch" {
+		t.Errorf("every mover pod mounts the scratch volume: %+v", vol)
+	}
 	cfg := pod.Containers[0].Env[0].Value
-	for _, want := range []string{`"mode":"restore"`, `"from":"latest"`, `"paths":["conf"]`, `"delete":true`} {
+	for _, want := range []string{`"mode":"restore"`, `"from":"latest"`, `"paths":["conf"]`} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %s: %s", want, cfg)
 		}
+	}
+	if strings.Contains(cfg, `"delete":true`) {
+		t.Errorf("the fixture sets no delete: %s", cfg)
 	}
 
 	finishRestoreJob(t, c, true, jobcfg.Result{Mode: jobcfg.ModeRestore, OK: true, Snapshot: "2026-11-22T08-00-00Z", Time: testNow})
@@ -311,9 +318,6 @@ func TestRestoreRejectsBadInputsBeforeScalingDown(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			rs := testRestore(mutate)
-			if name == "database" {
-				rs.Spec.Paths = nil
-			}
 			c := newFake(t, testStore(), filesPolicy(), rs, testDeployment(nil))
 			r := newRestoreReconciler(c)
 			for range 3 {
@@ -412,58 +416,48 @@ func TestRestoresOfOnePolicyQueue(t *testing.T) {
 	}
 }
 
-// from is engine-specific: a snapshot folder name for the plain engine, a restic snapshot id for the
-// restic engine. Both must reject the other's format before workloads are stopped.
-func TestRestoreFromMatchesEngine(t *testing.T) {
+// from must name something the mover can resolve: "latest" or a restic snapshot id (8-64 hex chars).
+// Timestamp snapshot-folder names from the removed snapshots engine are no longer valid.
+func TestRestoreFromAcceptsLatestOrID(t *testing.T) {
 	p := filesPolicy()
 	rs := &v1alpha1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
-		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app", From: "deadbeef"},
+		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app"},
 	}
-	if err := validateRestore(rs, p); err == nil {
-		t.Error("a hex id is not a snapshot folder name; the snapshots engine must reject it")
-	}
-	rs.Spec.From = "2026-11-22T10-05-00Z"
-	if err := validateRestore(rs, p); err != nil {
-		t.Errorf("folder name on the snapshots engine: %v", err)
-	}
-	p.Spec.Engine = v1alpha1.EngineRestic
-	if err := validateRestore(rs, p); err == nil {
-		t.Error("a folder name is not a restic snapshot id; the restic engine must reject it")
-	}
-	rs.Spec.From = "deadbeef"
-	if err := validateRestore(rs, p); err != nil {
-		t.Errorf("restic id on the restic engine: %v", err)
-	}
-	for _, from := range []string{"latest", ""} {
+	for _, from := range []string{"", "latest", "deadbeef", "abc12345", strings.Repeat("ab", 32)} {
 		rs.Spec.From = from
 		if err := validateRestore(rs, p); err != nil {
 			t.Errorf("from %q: %v", from, err)
 		}
 	}
+	for _, from := range []string{"2026-11-22T10-05-00Z", "2026-11-22", "deadbee", "DEADBEEF", "latest2", "not-an-id"} {
+		rs.Spec.From = from
+		if err := validateRestore(rs, p); err == nil {
+			t.Errorf("from %q is neither \"latest\" nor a restic id and must be rejected", from)
+		}
+	}
 }
 
-// restic refuses exclude together with include, so a restic restore cannot restrict paths and delete at
-// the same time while still protecting excluded files. The plain engine keeps both.
-func TestResticRestoreRejectsDeleteWithPaths(t *testing.T) {
-	p := filesPolicy()
+// The mover passes the backup's exclude patterns to a restore with delete, so that excluded paths are
+// never deleted. restic refuses exclude together with include, so delete and paths cannot both keep
+// that guarantee; every policy rejects the combination rather than surprise the user mid-restore.
+func TestRestoreRejectsDeleteWithPaths(t *testing.T) {
 	rs := &v1alpha1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
 		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app", Delete: true, Paths: []string{"keep"}},
 	}
-	if err := validateRestore(rs, p); err != nil {
-		t.Errorf("the files engine supports delete with paths: %v", err)
+	for _, p := range []*v1alpha1.BackupPolicy{filesPolicy(), sqlitePolicy(), postgresPolicy()} {
+		if err := validateRestore(rs, p); err == nil {
+			t.Errorf("delete with paths must be rejected on a %s policy", p.Spec.Source.Type)
+		}
 	}
-	p.Spec.Engine = v1alpha1.EngineRestic
-	if err := validateRestore(rs, p); err == nil {
-		t.Error("restic delete with paths must be rejected")
-	}
+	p := filesPolicy()
 	rs.Spec.Paths = nil
 	if err := validateRestore(rs, p); err != nil {
-		t.Errorf("restic delete alone: %v", err)
+		t.Errorf("delete alone: %v", err)
 	}
 	rs.Spec.Paths, rs.Spec.Delete = []string{"keep"}, false
 	if err := validateRestore(rs, p); err != nil {
-		t.Errorf("restic paths alone: %v", err)
+		t.Errorf("paths alone: %v", err)
 	}
 }

@@ -55,7 +55,7 @@ const (
 
 // Restore carries restore-only options.
 type Restore struct {
-	// From is "latest" or a snapshot name.
+	// From is "latest" or a restic snapshot id (hex).
 	From      string   `json:"from"`
 	Paths     []string `json:"paths,omitempty"`
 	Databases []string `json:"databases,omitempty"`

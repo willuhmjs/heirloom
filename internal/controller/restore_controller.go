@@ -270,23 +270,17 @@ func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 	if err := validateRestoreInputs(rs); err != nil {
 		return err
 	}
-	// from must name something the mover can resolve: a snapshot folder name for the plain engine, a
-	// restic snapshot id for the restic engine. Reject here, not after the workloads have been stopped.
-	if from := rs.Spec.From; from != "" && from != "latest" {
-		if p.Spec.Engine == v1alpha1.EngineRestic {
-			if !snapshot.ResticID(from) {
-				return fmt.Errorf("from %q is neither \"latest\" nor a restic snapshot id (hex)", from)
-			}
-		} else if _, ok := snapshot.Parse(from); !ok {
-			return fmt.Errorf("from %q is neither \"latest\" nor a snapshot name such as 2026-11-22T10-05-00Z", from)
-		}
+	// from must name something the mover can resolve: "latest" or a restic snapshot id. Reject here, not
+	// after the workloads have been stopped.
+	if from := rs.Spec.From; from != "" && from != "latest" && !snapshot.ResticID(from) {
+		return fmt.Errorf("from %q is neither \"latest\" nor a restic snapshot id (hex)", from)
 	}
 	s := rs.Spec
-	// The mover passes the backup's exclude patterns to a restic restore with delete, so that excluded
-	// paths are never deleted. restic refuses exclude together with include, so paths + delete cannot
-	// keep that guarantee for this engine; reject it here rather than surprise the user mid-restore.
-	if p.Spec.Engine == v1alpha1.EngineRestic && s.Delete && len(s.Paths) > 0 {
-		return fmt.Errorf("restic restores support delete or paths, not both (restic cannot protect excluded paths while restricting includes)")
+	// The mover passes the backup's exclude patterns to a restore with delete, so that excluded paths are
+	// never deleted. restic refuses exclude together with include, so paths + delete cannot keep that
+	// guarantee; reject it here rather than surprise the user mid-restore.
+	if s.Delete && len(s.Paths) > 0 {
+		return fmt.Errorf("restores support delete or paths, not both (excluded paths cannot be protected while restricting includes)")
 	}
 	switch p.Spec.Source.Type {
 	case v1alpha1.SourceFiles:
@@ -306,7 +300,7 @@ func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 }
 
 // validateRestoreInputs rejects values the mover would only reject after the workloads were already stopped.
-// (from is checked in validateRestore, where the policy's engine is known.)
+// (from is checked in validateRestore, next to the other policy-dependent rules.)
 func validateRestoreInputs(rs *v1alpha1.Restore) error {
 	if len(rs.Name) > maxRestoreNameLen {
 		return fmt.Errorf("restore name is longer than %d characters", maxRestoreNameLen)

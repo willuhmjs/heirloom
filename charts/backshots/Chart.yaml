@@ -1,6 +1,6 @@
 apiVersion: v2
 name: backshots
-description: Kubernetes-native backups that land as plain files on your NAS. App-consistent Postgres and SQLite dumps, hardlink snapshots with GFS retention, restores that are tested.
+description: Kubernetes-native backups that land as deduplicated restic repositories on your NAS. App-consistent Postgres and SQLite dumps, GFS retention with prune, restores that are tested.
 type: application
 version: 0.1.0
 appVersion: 0.1.0

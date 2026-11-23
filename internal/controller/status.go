@@ -189,18 +189,6 @@ func validatePolicy(p *v1alpha1.BackupPolicy) error {
 	if err := validateSource(p.Spec.Source); err != nil {
 		return err
 	}
-	// The CRD schema restricts engine to the enum and rejects restic on non-files sources; re-check here so a
-	// hand-crafted object (or a cluster whose CRD predates the rule) fails with a clear message instead of
-	// silently running the wrong engine. Unset means snapshots, whose behaviour must not change.
-	switch p.Spec.Engine {
-	case "", v1alpha1.EngineSnapshots:
-	case v1alpha1.EngineRestic:
-		if p.Spec.Source.Type != v1alpha1.SourceFiles {
-			return fmt.Errorf("engine restic only supports source.type files")
-		}
-	default:
-		return fmt.Errorf("unknown engine %q", p.Spec.Engine)
-	}
 	if tz := p.Spec.TimeZone; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
 			return fmt.Errorf("timeZone %q: %w", tz, err)

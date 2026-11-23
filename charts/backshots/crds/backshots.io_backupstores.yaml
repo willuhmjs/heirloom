@@ -46,8 +46,8 @@ spec:
             description: BackupStoreSpec describes where backups live.
             properties:
               nfs:
-                description: NFSSpec points at an NFS export that receives the snapshots
-                  as plain files.
+                description: NFSSpec points at an NFS export that receives the restic
+                  repositories.
                 properties:
                   path:
                     description: Path of the export, e.g. /volume1/k8s-backup.

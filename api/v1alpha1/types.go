@@ -21,7 +21,7 @@ type Retention struct {
 	Monthly int32 `json:"monthly,omitempty"`
 }
 
-// NFSSpec points at an NFS export that receives the snapshots as plain files.
+// NFSSpec points at an NFS export that receives the restic repositories.
 type NFSSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Server string `json:"server"`
@@ -56,17 +56,6 @@ type BackupStoreList struct {
 	Items           []BackupStore `json:"items"`
 }
 
-// Engine selects how a policy stores its backups. snapshots (the default) writes plain hardlinked snapshot
-// folders; restic stores data in a restic repository inside the policy's own store directory, so changed large
-// files are stored as chunks instead of copied whole.
-// +kubebuilder:validation:Enum=snapshots;restic
-type Engine string
-
-const (
-	EngineSnapshots Engine = "snapshots"
-	EngineRestic    Engine = "restic"
-)
-
 // SourceType selects how data is captured.
 // +kubebuilder:validation:Enum=files;sqlite;postgres
 type SourceType string
@@ -77,20 +66,16 @@ const (
 	SourcePostgres SourceType = "postgres"
 )
 
-// FilesSource snapshots a directory tree of a PVC (rsync -aHAX with hardlinks to the previous snapshot).
+// FilesSource snapshots a directory tree of a PVC (restic backup, with exclude patterns).
 type FilesSource struct {
 	// +kubebuilder:validation:MinLength=1
 	PVC string `json:"pvc"`
 	// SubPath inside the PVC to back up. Defaults to the whole volume.
 	// +optional
 	SubPath string `json:"subPath,omitempty"`
-	// Exclude patterns passed to rsync --exclude.
+	// Exclude patterns passed to restic backup --exclude.
 	// +optional
 	Exclude []string `json:"exclude,omitempty"`
-	// SkipACLsAndXattrs backs up and restores without ACLs and extended attributes (rsync -aH instead of
-	// -aHAX). Use it when the NFS export does not support them, which makes rsync fail with exit 23.
-	// +optional
-	SkipACLsAndXattrs bool `json:"skipACLsAndXattrs,omitempty"`
 }
 
 // SQLiteSource takes consistent copies of SQLite databases with the online backup API.
@@ -188,7 +173,6 @@ type PodOptions struct {
 }
 
 // BackupPolicySpec describes one thing to back up.
-// +kubebuilder:validation:XValidation:rule="self.engine != 'restic' || self.source.type == 'files'",message="engine restic only supports source.type files"
 type BackupPolicySpec struct {
 	// StoreRef names a cluster-scoped BackupStore.
 	// +kubebuilder:validation:MinLength=1
@@ -200,14 +184,7 @@ type BackupPolicySpec struct {
 	// Snapshot names and retention buckets are always UTC.
 	// +optional
 	TimeZone string `json:"timeZone,omitempty"`
-	// Engine selects the backup engine. restic deduplicates changed files into chunks but makes the store
-	// folder unreadable without the restic binary; snapshots writes plain folders you can browse.
-	// restic requires source.type files.
-	// +kubebuilder:validation:Enum=snapshots;restic
-	// +kubebuilder:default=snapshots
-	// +optional
-	Engine Engine `json:"engine,omitempty"`
-	Source Source `json:"source"`
+	Source   Source `json:"source"`
 	// Retention overrides the store default.
 	// +optional
 	Retention *Retention `json:"retention,omitempty"`
@@ -302,9 +279,9 @@ type RestoreSpec struct {
 	// PolicyRef names a BackupPolicy in the same namespace.
 	// +kubebuilder:validation:MinLength=1
 	PolicyRef string `json:"policyRef"`
-	// From is "latest" or a snapshot name such as 2026-11-22T10-05-00Z. For a restic-engine policy it is
-	// "latest" or a restic snapshot id (hex). Default latest.
-	// +kubebuilder:validation:Pattern=`^(latest|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z|[0-9a-f]{8,64})$`
+	// From is "latest" or a restic snapshot id (8-64 hex characters, the short one in status.lastSnapshot.name).
+	// Default latest.
+	// +kubebuilder:validation:Pattern=`^(latest|[0-9a-f]{8,64})$`
 	// +kubebuilder:default=latest
 	From string `json:"from,omitempty"`
 	// TargetPVC overrides the PVC to restore into (files and sqlite); defaults to the policy's PVC.

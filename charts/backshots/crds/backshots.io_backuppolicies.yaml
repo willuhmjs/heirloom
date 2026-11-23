@@ -66,16 +66,6 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
-              engine:
-                default: snapshots
-                description: |-
-                  Engine selects the backup engine. restic deduplicates changed files into chunks but makes the store
-                  folder unreadable without the restic binary; snapshots writes plain folders you can browse.
-                  restic requires source.type files.
-                enum:
-                - snapshots
-                - restic
-                type: string
               minSourcePercent:
                 default: 50
                 description: |-
@@ -261,22 +251,17 @@ spec:
                   matching Type.
                 properties:
                   files:
-                    description: FilesSource snapshots a directory tree of a PVC (rsync
-                      -aHAX with hardlinks to the previous snapshot).
+                    description: FilesSource snapshots a directory tree of a PVC (restic
+                      backup, with exclude patterns).
                     properties:
                       exclude:
-                        description: Exclude patterns passed to rsync --exclude.
+                        description: Exclude patterns passed to restic backup --exclude.
                         items:
                           type: string
                         type: array
                       pvc:
                         minLength: 1
                         type: string
-                      skipACLsAndXattrs:
-                        description: |-
-                          SkipACLsAndXattrs backs up and restores without ACLs and extended attributes (rsync -aH instead of
-                          -aHAX). Use it when the NFS export does not support them, which makes rsync fail with exit 23.
-                        type: boolean
                       subPath:
                         description: SubPath inside the PVC to back up. Defaults to
                           the whole volume.
@@ -445,9 +430,6 @@ spec:
             - source
             - storeRef
             type: object
-            x-kubernetes-validations:
-            - message: engine restic only supports source.type files
-              rule: self.engine != 'restic' || self.source.type == 'files'
           status:
             properties:
               conditions:

@@ -2,9 +2,11 @@ package runner
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +18,7 @@ import (
 	"github.com/willuhmjs/backshots/internal/snapshot"
 )
 
-// requireRestic skips the restic engine tests on machines without the binary; CI images ship it.
+// requireRestic skips the tests that shell out to restic on machines without the binary; CI images ship it.
 func requireRestic(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("restic"); err != nil {
@@ -24,24 +26,19 @@ func requireRestic(t *testing.T) {
 	}
 }
 
-// newResticRunner points a restic-engine runner at temp dirs, like the other runner tests.
+// newResticRunner points a runner at temp dirs with the retention a test wants, on top of the shared
+// testRunner setup (policyDir, source and scratch all wired, so resticBase and stageSnapshot work).
 func newResticRunner(t *testing.T, ret snapshot.Retention) (*runner, string) {
 	t.Helper()
 	requireRestic(t)
-	root := t.TempDir()
-	src := mkdir(t, root, "source")
 	spec := v1alpha1.BackupPolicySpec{
-		Engine: v1alpha1.EngineRestic,
 		// The API server defaults this to 50; a fake config must carry the same value the runner would see.
 		MinSourcePercent: 50,
 		Source:           v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "p"}},
 	}
-	r := newRunner(jobcfg.Config{Mode: jobcfg.ModeBackup, Namespace: "ns", Policy: "p", Spec: spec, Retention: ret})
-	r.policyDir = mkdir(t, root, "store")
-	r.source = src
-	r.scratch = mkdir(t, root, "scratch")
-	r.out = new(bytes.Buffer)
-	return r, src
+	r := testRunner(t, jobcfg.ModeBackup, spec)
+	r.cfg.Retention = ret
+	return r, r.source
 }
 
 // dirBytes is the disk size of a tree, used to measure what a run really added to the repository.
@@ -416,5 +413,100 @@ func TestResticVerify(t *testing.T) {
 	v2.cfg.Mode = jobcfg.ModeVerify
 	if err := v2.verify(context.Background(), &jobcfg.Result{}); err == nil {
 		t.Fatal("verify must fail on a corrupted repository")
+	}
+}
+
+// fakePGShellBin plants fake pg_dump/pg_dumpall/psql shell scripts on PATH: the dumps carry
+// recognizable payloads and psql just swallows the SQL it is fed, so the postgres staging path can run
+// end to end without a server.
+func fakePGShellBin(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, body := range map[string]string{
+		"pg_dump":    "#!/bin/sh\nprintf 'fake pg_dump %s\\n' \"$*\"\n",
+		"pg_dumpall": "#!/bin/sh\nprintf 'fake pg_dumpall %s\\n' \"$*\"\n",
+		"psql":       "#!/bin/sh\ncat >/dev/null 2>&1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// gunzip reads a gzipped dump back for content assertions.
+func gunzip(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A postgres backup must stage the pg_dump/pg_dumpall payloads into postgres/ inside the snapshot and
+// sweep the staging tree; a restore must stage both dumps back out of the repository onto disk intact.
+// Fake client binaries stand in for the server, so this covers the staging/commit path only — the real
+// load logic is exercised by the verify-pod e2e elsewhere.
+func TestResticPostgresStagesAndCommitsDumps(t *testing.T) {
+	requireRestic(t)
+	fakePGShellBin(t)
+	r, _ := newResticRunner(t, snapshot.Retention{Hourly: 24})
+	r.cfg.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourcePostgres, Postgres: &v1alpha1.PostgresSource{
+		Host: "unused.invalid", Databases: []string{"app"},
+	}}
+	ctx := context.Background()
+	if err := r.backup(ctx, &jobcfg.Result{}); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(r.policyDir, stagingDirName)); !os.IsNotExist(err) {
+		t.Error("the staging tree survived the backup")
+	}
+
+	out, err := r.resticRun(ctx, "", "ls", "latest", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"/postgres/app.sql.gz": false, "/postgres/globals.sql.gz": false}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var n resticNode
+		if json.Unmarshal([]byte(line), &n) == nil && n.MessageType == "node" && n.Type == "file" {
+			if _, ok := want[n.Path]; ok {
+				want[n.Path] = true
+			}
+		}
+	}
+	for p, found := range want {
+		if !found {
+			t.Errorf("snapshot does not hold %s", p)
+		}
+	}
+
+	// Restore with the fake psql standing in for the server: the payload must come back out of the
+	// repository and land in the restore staging directory byte-for-byte.
+	r.cfg.Mode = jobcfg.ModeRestore
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	if err := r.restore(ctx, &jobcfg.Result{}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	stage := filepath.Join(r.scratch, "restic-restore", "postgres")
+	if got := gunzip(t, filepath.Join(stage, "app.sql.gz")); !strings.Contains(got, "app") {
+		t.Errorf("staged app dump = %q", got)
+	}
+	if got := gunzip(t, filepath.Join(stage, "globals.sql.gz")); !strings.Contains(got, "--globals-only") {
+		t.Errorf("staged globals dump = %q", got)
 	}
 }

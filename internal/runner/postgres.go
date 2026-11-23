@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/willuhmjs/backshots/internal/snapshot"
 )
 
 const globalsFile = "globals.sql.gz"
@@ -30,7 +28,9 @@ func (r *runner) pgEnv() []string {
 	return append(os.Environ(), "PGHOST="+pg.Host, "PGPORT="+strconv.Itoa(int(port)), "PGUSER="+user, "PGCONNECT_TIMEOUT=30")
 }
 
-func (r *runner) capturePostgres(ctx context.Context, inc string, st *snapshot.Status) error {
+// capturePostgres writes the per-database dumps and the globals dump under stage/postgres, the
+// layout a restore reads back out of the snapshot. Committing them is the backup run's job.
+func (r *runner) capturePostgres(ctx context.Context, stage string) error {
 	pg := r.cfg.Spec.Source.Postgres
 	if pg == nil {
 		return fmt.Errorf("source.postgres is not set")
@@ -54,7 +54,7 @@ func (r *runner) capturePostgres(ctx context.Context, inc string, st *snapshot.S
 	if len(dbs) == 0 {
 		return fmt.Errorf("no databases to dump")
 	}
-	dir := filepath.Join(inc, "postgres")
+	dir := filepath.Join(stage, "postgres")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -66,7 +66,6 @@ func (r *runner) capturePostgres(ctx context.Context, inc string, st *snapshot.S
 		if err := dumpGzip(ctx, env, filepath.Join(dir, db+".sql.gz"), "pg_dump", "--create", "--clean", "--if-exists", "-d", db); err != nil {
 			return fmt.Errorf("dump %s: %w", db, err)
 		}
-		st.Items = append(st.Items, db)
 	}
 	if pg.Globals != "skip" {
 		args := []string{"--globals-only"}
@@ -78,9 +77,7 @@ func (r *runner) capturePostgres(ctx context.Context, inc string, st *snapshot.S
 			return fmt.Errorf("dump globals: %w", err)
 		}
 	}
-	files, bytes, err := countTree(dir)
-	st.Files, st.Bytes = files, bytes
-	return err
+	return nil
 }
 
 func validDBName(db string) error {

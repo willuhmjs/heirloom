@@ -3,9 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
-	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,87 +15,55 @@ import (
 	"github.com/willuhmjs/backshots/internal/jobcfg"
 )
 
-const verifySampleFiles = 100
-
+// verify proves the newest snapshot in the policy's restic repository can actually be read back:
+// restic's own structural check, a rotating read of the pack data, and a check that exercises this
+// source type's payload through its real decode path (sample files, integrity_check, a scratch
+// postgres). Verify only mounts the store read-only plus scratch; restic never writes to the
+// repository here and there is no lock to clear.
 func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
-	if r.cfg.Spec.Engine == v1alpha1.EngineRestic {
-		return r.verifyRestic(ctx, res)
-	}
-	from := "latest"
-	if r.cfg.Restore != nil {
-		from = r.cfg.Restore.From
-	}
-	name, err := selectSnapshot(r.policyDir, from)
+	snap, err := r.resticResolve(ctx, "latest")
 	if err != nil {
 		return err
 	}
-	res.Snapshot = name
-	dir := filepath.Join(r.policyDir, name)
-	st, err := readStatus(dir)
+	res.Snapshot = snap.ShortID
+	res.Files, res.Bytes = snap.Summary.TotalFilesProcessed, snap.Summary.TotalBytesProcessed
+	r.logf("verifying restic snapshot %s", snap.ShortID)
+
+	subset, err := r.resticCheckData(ctx)
 	if err != nil {
-		return fmt.Errorf("snapshot %s: %w", name, err)
+		return fmt.Errorf("verify %s: %w", snap.ShortID, err)
 	}
-	res.Files, res.Bytes = st.Files, st.Bytes
-	r.logf("verifying snapshot %s", name)
+	verified := "check ok, read-data-subset " + subset
 
 	switch r.cfg.Spec.Source.Type {
 	case v1alpha1.SourceFiles:
-		err = r.verifyFiles(dir, st.Files, st.Bytes)
+		n, err := r.resticVerifySampleFiles(ctx, snap.ID)
+		if err != nil {
+			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
+		}
+		verified += fmt.Sprintf(", %d sample files checksummed", n)
 	case v1alpha1.SourceSQLite:
-		err = r.verifySQLite(ctx, dir)
-	case v1alpha1.SourcePostgres:
-		err = r.verifyPostgres(ctx, dir)
-	default:
-		err = fmt.Errorf("unknown source type %q", r.cfg.Spec.Source.Type)
-	}
-	if err != nil {
-		return fmt.Errorf("verify %s: %w", name, err)
-	}
-	res.Message = "verified snapshot " + name
-	return nil
-}
-
-func (r *runner) verifyFiles(dir string, wantFiles, wantBytes int64) error {
-	data := filepath.Join(dir, "data")
-	files, bytes, err := countTree(data)
-	if err != nil {
-		return err
-	}
-	if files != wantFiles || bytes != wantBytes {
-		return fmt.Errorf("snapshot has %d files/%d bytes, status says %d/%d", files, bytes, wantFiles, wantBytes)
-	}
-	// Reservoir-sample regular files and read each one completely.
-	var sample []string
-	seen := 0
-	err = filepath.WalkDir(data, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		seen++
-		if len(sample) < verifySampleFiles {
-			sample = append(sample, p)
-		} else if j := rand.IntN(seen); j < verifySampleFiles {
-			sample[j] = p
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	for _, p := range sample {
-		f, err := os.Open(p)
+		stage, err := r.stageSnapshot(ctx, snap)
 		if err == nil {
-			_, err = io.Copy(io.Discard, f)
-			f.Close()
+			err = r.verifySQLite(ctx, stage)
 		}
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", p, err)
+			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
 		}
+		verified += ", sqlite integrity_check ok"
+	case v1alpha1.SourcePostgres:
+		stage, err := r.stageSnapshot(ctx, snap)
+		if err == nil {
+			err = r.verifyPostgres(ctx, stage)
+		}
+		if err != nil {
+			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
+		}
+		verified += ", dumps loaded and assertions passed in a scratch postgres"
+	default:
+		return fmt.Errorf("unknown source type %q", r.cfg.Spec.Source.Type)
 	}
-	r.logf("%d files, %d bytes match status; read %d sampled files", files, bytes, len(sample))
+	res.Message = fmt.Sprintf("verified restic snapshot %s: %s", snap.ShortID, verified)
 	return nil
 }
 

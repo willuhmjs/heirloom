@@ -6,10 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,13 +17,10 @@ import (
 	"time"
 
 	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
 )
 
 // EnvTerminationLog overrides jobcfg.TerminationLog (used by tests).
 const EnvTerminationLog = "BS_TERMINATION_LOG"
-
-const incompleteMaxAge = 24 * time.Hour
 
 // runner holds the config plus the filesystem locations, which tests point at temp dirs.
 type runner struct {
@@ -223,168 +218,4 @@ func resolveWithin(root, rel string) (string, error) {
 		return "", fmt.Errorf("path %q resolves outside its volume (symlink?)", rel)
 	}
 	return filepath.Join(real, rest), nil
-}
-
-// listSnapshots returns the complete snapshot names in policyDir, oldest first. A missing dir is empty.
-func listSnapshots(policyDir string) ([]string, error) {
-	ents, err := os.ReadDir(policyDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range ents {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
-	}
-	return snapshot.Sorted(names), nil
-}
-
-// selectSnapshot resolves "latest"/"" or an exact snapshot name to a complete snapshot.
-func selectSnapshot(policyDir, from string) (string, error) {
-	names, err := listSnapshots(policyDir)
-	if err != nil {
-		return "", err
-	}
-	if from == "" || from == "latest" {
-		if len(names) == 0 {
-			return "", fmt.Errorf("no complete snapshots in %s", policyDir)
-		}
-		return names[len(names)-1], nil
-	}
-	if _, ok := snapshot.Parse(from); !ok { // also rejects any path separators or '..'
-		return "", fmt.Errorf("invalid snapshot name %q", from)
-	}
-	for _, n := range names {
-		if n == from {
-			return n, nil
-		}
-	}
-	return "", fmt.Errorf("snapshot %q not found (or not complete)", from)
-}
-
-func readStatus(snapDir string) (snapshot.Status, error) {
-	var st snapshot.Status
-	b, err := os.ReadFile(filepath.Join(snapDir, snapshot.StatusFile))
-	if err != nil {
-		return st, err
-	}
-	return st, json.Unmarshal(b, &st)
-}
-
-func writeStatus(dir string, st snapshot.Status) error {
-	b, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileSync(filepath.Join(dir, snapshot.StatusFile), b, 0o644)
-}
-
-func writeFileSync(path string, b []byte, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
-
-// countTree counts non-directory entries and the bytes of regular files under root.
-func countTree(root string) (files, bytes int64, err error) {
-	err = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		files++
-		if info, err := d.Info(); err == nil && info.Mode().IsRegular() {
-			bytes += info.Size()
-		}
-		return nil
-	})
-	return
-}
-
-// cleanIncomplete removes .incomplete-* directories whose mtime is older than maxAge.
-func cleanIncomplete(policyDir string, now time.Time, maxAge time.Duration) (removed []string, err error) {
-	ents, err := os.ReadDir(policyDir)
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range ents {
-		if !e.IsDir() || !snapshot.IsIncomplete(e.Name()) {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil || now.Sub(info.ModTime()) <= maxAge {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(policyDir, e.Name())); err != nil {
-			return removed, err
-		}
-		removed = append(removed, e.Name())
-	}
-	return removed, nil
-}
-
-// prune deletes snapshots that retention no longer keeps and returns (kept, pruned).
-func prune(policyDir string, ret snapshot.Retention) (int, int, error) {
-	if ret.IsZero() {
-		ret = snapshot.Default
-	}
-	names, err := listSnapshots(policyDir)
-	if err != nil {
-		return 0, 0, err
-	}
-	// Finish deletions an earlier, interrupted run started.
-	if err := sweepDeleting(policyDir); err != nil {
-		return len(names), 0, err
-	}
-	del := snapshot.Prune(names, ret)
-	var firstErr error
-	removed := 0
-	for _, n := range del {
-		// Rename first: it is atomic, so a half-deleted tree never keeps a snapshot name that restore or
-		// verify could pick. A crash mid-delete leaves a .deleting- directory that the next run finishes.
-		tomb := filepath.Join(policyDir, snapshot.DeletingPrefix+n)
-		if err := os.Rename(filepath.Join(policyDir, n), tomb); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		removed++
-		if err := os.RemoveAll(tomb); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return len(names) - removed, removed, firstErr
-}
-
-// sweepDeleting removes .deleting- directories left behind by an interrupted prune.
-func sweepDeleting(policyDir string) error {
-	ents, err := os.ReadDir(policyDir)
-	if err != nil {
-		return err
-	}
-	for _, e := range ents {
-		if e.IsDir() && strings.HasPrefix(e.Name(), snapshot.DeletingPrefix) {
-			if err := os.RemoveAll(filepath.Join(policyDir, e.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

@@ -40,12 +40,11 @@ type moverPod struct {
 
 func (m moverPod) readOnlyStore() bool { return m.mode != jobcfg.ModeBackup }
 
-// needsScratch: verify always gets the scratch volume (restored database, sample files), and every
-// restic run does as well: the runner points restic's chunk cache (--cache-dir) at it so a large cache
-// never lands on the node's root disk, honouring pod.scratchStorageClassName like verify does.
-func (m moverPod) needsScratch() bool {
-	return m.mode == jobcfg.ModeVerify || m.spec.Engine == v1alpha1.EngineRestic
-}
+// needsScratch: every mover run mounts the scratch volume. The runner points restic's chunk cache
+// (--cache-dir) at it so a large cache never lands on the node's root disk; restores and verifies of
+// sqlite/postgres payloads are materialized through it, and the throwaway postgres for verify.sql
+// lives there. pod.scratchStorageClassName sizes it.
+func (m moverPod) needsScratch() bool { return true }
 
 func (m moverPod) readOnlySource() bool {
 	return m.spec.Source.Type == v1alpha1.SourceFiles && m.mode != jobcfg.ModeRestore
@@ -155,7 +154,7 @@ func (m moverPod) moverContainer(encodedConfig string) corev1.Container {
 		SecurityContext: &corev1.SecurityContext{
 			RunAsUser:                ptr.To[int64](0),
 			AllowPrivilegeEscalation: ptr.To(false),
-			// Root, but only with what rsync -a --numeric-ids and the postgres privilege drop need.
+			// Root, but only with what restic (open the whole store, chowns restored files) and the postgres privilege drop need.
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 				Add:  []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETUID", "SETGID"},

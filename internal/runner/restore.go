@@ -12,104 +12,131 @@ import (
 	"github.com/willuhmjs/backshots/internal/jobcfg"
 )
 
+// restore writes one snapshot from the policy's restic repository back to the volume: files trees
+// are written in place, sqlite and postgres payloads are first materialized into scratch, where
+// each source's own load logic picks them up.
 func (r *runner) restore(ctx context.Context, res *jobcfg.Result) error {
 	rs := r.cfg.Restore
 	if rs == nil {
 		return fmt.Errorf("restore options missing from config")
 	}
-	if r.cfg.Spec.Engine == v1alpha1.EngineRestic {
-		return r.restoreRestic(ctx, res)
-	}
-	name, err := selectSnapshot(r.policyDir, rs.From)
+	snap, err := r.resticResolve(ctx, rs.From)
 	if err != nil {
 		return err
 	}
-	res.Snapshot = name
-	dir := filepath.Join(r.policyDir, name)
-	st, err := readStatus(dir)
-	if err != nil {
-		return fmt.Errorf("snapshot %s: %w", name, err)
-	}
-	res.Files, res.Bytes = st.Files, st.Bytes
-	r.logf("restoring from snapshot %s", name)
+	res.Snapshot = snap.ShortID
+	res.Files, res.Bytes = snap.Summary.TotalFilesProcessed, snap.Summary.TotalBytesProcessed
 
 	switch r.cfg.Spec.Source.Type {
 	case v1alpha1.SourceFiles:
-		err = r.restoreFiles(ctx, dir)
+		err = r.restoreFiles(ctx, snap)
 	case v1alpha1.SourceSQLite:
-		err = r.restoreSQLite(dir)
+		var stage string
+		if stage, err = r.stageSnapshot(ctx, snap); err == nil {
+			err = r.restoreSQLite(stage)
+		}
 	case v1alpha1.SourcePostgres:
-		err = r.restorePostgres(ctx, dir)
+		var stage string
+		if stage, err = r.stageSnapshot(ctx, snap); err == nil {
+			err = r.restorePostgres(ctx, stage)
+		}
 	default:
 		err = fmt.Errorf("unknown source type %q", r.cfg.Spec.Source.Type)
 	}
 	if err != nil {
 		return err
 	}
-	res.Message = "restored snapshot " + name
+	res.Message = "restored restic snapshot " + snap.ShortID
 	return nil
 }
 
-func (r *runner) restoreFiles(ctx context.Context, dir string) error {
+// restoreFiles restores the files tree onto the volume root (or the policy's subPath root): the
+// tree was stored as "." from exactly that directory, so files land back where they came from.
+// With delete the backup's exclude patterns are passed along too — restic's --delete honours them,
+// which is how a restic restore keeps the invariant that a restore never removes paths the backup
+// excluded.
+func (r *runner) restoreFiles(ctx context.Context, snap *resticSnapshot) error {
 	rs := r.cfg.Restore
-	data := filepath.Join(dir, "data")
-	files := r.cfg.Spec.Source.Files
-	base := []string{rsyncFlags(files != nil && files.SkipACLsAndXattrs), "-S", "--no-D", "--numeric-ids"}
-	// The snapshot holds the contents of the policy's subPath, so they restore back onto that subPath.
-	dstRoot := r.source
-	if fs := r.cfg.Spec.Source.Files; fs != nil && fs.SubPath != "" && fs.SubPath != "." && fs.SubPath != "/" {
-		sub, err := cleanRel(fs.SubPath)
-		if err != nil {
-			return fmt.Errorf("subPath: %w", err)
-		}
-		if dstRoot, err = resolveWithin(r.source, sub); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(dstRoot, 0o755); err != nil {
-			return err
-		}
+	dst, err := r.sourceRoot()
+	if err != nil {
+		return err
 	}
-	if len(rs.Paths) == 0 {
-		if rs.Delete {
-			base = append(base, "--delete")
-			base = append(base, protectExcludes(files)...)
-		}
-		return rsync(ctx, append(base, data+"/", dstRoot+"/"))
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
 	}
+	args := []string{"restore", snap.ID, "--target", dst}
 	for _, p := range rs.Paths {
 		rel, err := cleanRel(p)
 		if err != nil {
 			return err
 		}
-		src, err := resolveWithin(data, rel)
-		if err != nil {
-			return err
-		}
-		dst, err := resolveWithin(dstRoot, rel)
-		if err != nil {
-			return err
-		}
-		info, err := os.Lstat(src)
-		if err != nil {
-			return fmt.Errorf("path %q is not in the snapshot: %w", rel, err)
-		}
-		args := append([]string{}, base...)
-		if info.IsDir() {
-			if rs.Delete {
-				args = append(args, "--delete")
-				args = append(args, protectExcludes(files)...)
+		// Anchored at the snapshot root ("/" prefix) so only the requested path matches, never a same-named
+		// directory elsewhere in the tree.
+		args = append(args, "--include", "/"+rel)
+	}
+	if rs.Delete {
+		args = append(args, "--delete")
+		if fs := r.cfg.Spec.Source.Files; fs != nil {
+			for _, e := range fs.Exclude {
+				args = append(args, "--exclude", e)
 			}
-			src, dst = src+"/", dst+"/"
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		r.logf("restoring %s", rel)
-		if err := rsync(ctx, append(args, src, dst)); err != nil {
-			return err
 		}
 	}
+	r.logf("restic restore %s -> %s", snap.ShortID, dst)
+	if _, err := r.resticRun(ctx, "", args...); err != nil {
+		return err
+	}
 	return nil
+}
+
+// stageSnapshot materializes a sqlite/postgres snapshot's payload into scratch and returns the
+// directory restoreSQLite/restorePostgres read; they expect the staging layout (sqlite/... and
+// postgres/... directly beneath it), which is how the payload was committed. Database restores
+// always go through scratch: the store mount is read-only during restore and verify, and scratch
+// is where the user promised the space (pod.scratchStorageClassName).
+func (r *runner) stageSnapshot(ctx context.Context, snap *resticSnapshot) (string, error) {
+	stage := filepath.Join(r.scratch, "restic-restore")
+	if err := os.RemoveAll(stage); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", err
+	}
+	args := []string{"restore", snap.ID, "--target", stage}
+	switch r.cfg.Spec.Source.Type {
+	case v1alpha1.SourceSQLite:
+		sq := r.cfg.Spec.Source.SQLite
+		if sq == nil {
+			return "", fmt.Errorf("source.sqlite is not set")
+		}
+		paths := sq.Paths
+		if rs := r.cfg.Restore; rs != nil && len(rs.Paths) > 0 {
+			paths = rs.Paths
+		}
+		for _, p := range paths {
+			rel, err := cleanRel(p)
+			if err != nil {
+				return "", err
+			}
+			args = append(args, "--include", "/sqlite/"+rel)
+		}
+	case v1alpha1.SourcePostgres:
+		// With an explicit database list, restore only those dumps; a full restore (no list) pulls
+		// the whole tree because restorePostgres also loads the globals from it.
+		if rs := r.cfg.Restore; rs != nil {
+			for _, db := range rs.Databases {
+				if err := validDBName(db); err != nil {
+					return "", err
+				}
+				args = append(args, "--include", "/postgres/"+db+".sql.gz")
+			}
+		}
+	}
+	r.logf("restic restore %s -> %s", snap.ShortID, stage)
+	if _, err := r.resticRun(ctx, "", args...); err != nil {
+		return "", err
+	}
+	return stage, nil
 }
 
 func (r *runner) restoreSQLite(dir string) error {
