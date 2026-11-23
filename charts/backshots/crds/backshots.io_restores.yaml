@@ -69,9 +69,10 @@ spec:
                 type: boolean
               from:
                 default: latest
-                description: From is "latest" or a snapshot name such as 2026-11-22T10-05-00Z.
-                  Default latest.
-                pattern: ^(latest|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z)$
+                description: |-
+                  From is "latest" or a snapshot name such as 2026-11-22T10-05-00Z. For a restic-engine policy it is
+                  "latest" or a restic snapshot id (hex). Default latest.
+                pattern: ^(latest|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z|[0-9a-f]{8,64})$
                 type: string
               paths:
                 description: Paths restricts a files restore to these sub-paths of

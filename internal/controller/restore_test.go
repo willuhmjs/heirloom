@@ -411,3 +411,59 @@ func TestRestoresOfOnePolicyQueue(t *testing.T) {
 		t.Errorf("r2 must keep waiting while r1 runs, phase = %s", got.Status.Phase)
 	}
 }
+
+// from is engine-specific: a snapshot folder name for the plain engine, a restic snapshot id for the
+// restic engine. Both must reject the other's format before workloads are stopped.
+func TestRestoreFromMatchesEngine(t *testing.T) {
+	p := filesPolicy()
+	rs := &v1alpha1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
+		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app", From: "deadbeef"},
+	}
+	if err := validateRestore(rs, p); err == nil {
+		t.Error("a hex id is not a snapshot folder name; the snapshots engine must reject it")
+	}
+	rs.Spec.From = "2026-11-22T10-05-00Z"
+	if err := validateRestore(rs, p); err != nil {
+		t.Errorf("folder name on the snapshots engine: %v", err)
+	}
+	p.Spec.Engine = v1alpha1.EngineRestic
+	if err := validateRestore(rs, p); err == nil {
+		t.Error("a folder name is not a restic snapshot id; the restic engine must reject it")
+	}
+	rs.Spec.From = "deadbeef"
+	if err := validateRestore(rs, p); err != nil {
+		t.Errorf("restic id on the restic engine: %v", err)
+	}
+	for _, from := range []string{"latest", ""} {
+		rs.Spec.From = from
+		if err := validateRestore(rs, p); err != nil {
+			t.Errorf("from %q: %v", from, err)
+		}
+	}
+}
+
+// restic refuses exclude together with include, so a restic restore cannot restrict paths and delete at
+// the same time while still protecting excluded files. The plain engine keeps both.
+func TestResticRestoreRejectsDeleteWithPaths(t *testing.T) {
+	p := filesPolicy()
+	rs := &v1alpha1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
+		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app", Delete: true, Paths: []string{"keep"}},
+	}
+	if err := validateRestore(rs, p); err != nil {
+		t.Errorf("the files engine supports delete with paths: %v", err)
+	}
+	p.Spec.Engine = v1alpha1.EngineRestic
+	if err := validateRestore(rs, p); err == nil {
+		t.Error("restic delete with paths must be rejected")
+	}
+	rs.Spec.Paths = nil
+	if err := validateRestore(rs, p); err != nil {
+		t.Errorf("restic delete alone: %v", err)
+	}
+	rs.Spec.Paths, rs.Spec.Delete = []string{"keep"}, false
+	if err := validateRestore(rs, p); err != nil {
+		t.Errorf("restic paths alone: %v", err)
+	}
+}

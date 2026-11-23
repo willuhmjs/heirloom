@@ -302,8 +302,9 @@ type RestoreSpec struct {
 	// PolicyRef names a BackupPolicy in the same namespace.
 	// +kubebuilder:validation:MinLength=1
 	PolicyRef string `json:"policyRef"`
-	// From is "latest" or a snapshot name such as 2026-11-22T10-05-00Z. Default latest.
-	// +kubebuilder:validation:Pattern=`^(latest|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z)$`
+	// From is "latest" or a snapshot name such as 2026-11-22T10-05-00Z. For a restic-engine policy it is
+	// "latest" or a restic snapshot id (hex). Default latest.
+	// +kubebuilder:validation:Pattern=`^(latest|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z|[0-9a-f]{8,64})$`
 	// +kubebuilder:default=latest
 	From string `json:"from,omitempty"`
 	// TargetPVC overrides the PVC to restore into (files and sqlite); defaults to the policy's PVC.

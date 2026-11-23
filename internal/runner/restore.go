@@ -17,6 +17,9 @@ func (r *runner) restore(ctx context.Context, res *jobcfg.Result) error {
 	if rs == nil {
 		return fmt.Errorf("restore options missing from config")
 	}
+	if r.cfg.Spec.Engine == v1alpha1.EngineRestic {
+		return r.restoreRestic(ctx, res)
+	}
 	name, err := selectSnapshot(r.policyDir, rs.From)
 	if err != nil {
 		return err

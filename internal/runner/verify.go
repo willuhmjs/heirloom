@@ -20,6 +20,9 @@ import (
 const verifySampleFiles = 100
 
 func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
+	if r.cfg.Spec.Engine == v1alpha1.EngineRestic {
+		return r.verifyRestic(ctx, res)
+	}
 	from := "latest"
 	if r.cfg.Restore != nil {
 		from = r.cfg.Restore.From

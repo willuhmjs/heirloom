@@ -10,6 +10,7 @@
 package snapshot
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,12 @@ func Parse(name string) (time.Time, bool) {
 	t, err := time.Parse(TimeLayout, name)
 	return t, err == nil
 }
+
+// resticID is a restic snapshot id: lowercase hex, 8 characters (as restic itself prints) up to the full 64.
+var resticID = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
+
+// ResticID reports whether s is a restic snapshot id rather than a snapshot directory name.
+func ResticID(s string) bool { return resticID.MatchString(s) }
 
 // IsIncomplete reports whether a directory name is an unfinished snapshot.
 func IsIncomplete(name string) bool { return strings.HasPrefix(name, IncompletePrefix) }

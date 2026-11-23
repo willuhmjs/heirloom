@@ -2,8 +2,11 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -256,4 +259,219 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// resticResolve picks the snapshot to read: "latest" (or unset) or an explicit id. The controller has
+// already validated the shape; the repository decides whether it exists.
+func (r *runner) resticResolve(ctx context.Context, from string) (*resticSnapshot, error) {
+	snaps, err := r.resticSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(snaps) == 0 {
+		return nil, fmt.Errorf("the restic repository in %s holds no snapshots", r.resticRepo())
+	}
+	if from == "" || from == "latest" {
+		return &snaps[len(snaps)-1], nil
+	}
+	if !snapshot.ResticID(from) {
+		return nil, fmt.Errorf("from %q is not \"latest\" or a restic snapshot id", from)
+	}
+	for i := range snaps {
+		if snaps[i].ShortID == from || snaps[i].ID == from || strings.HasPrefix(snaps[i].ID, from) {
+			return &snaps[i], nil
+		}
+	}
+	return nil, fmt.Errorf("restic snapshot %q not found", from)
+}
+
+// restoreRestic copies a snapshot back into the volume. The tree was stored relative to the source root,
+// so --target is exactly that root and files land where they came from, subPath included. With delete the
+// backup's exclude patterns are passed too: restic's --delete honours them, which is how a restic restore
+// keeps the invariant that a restore never removes paths the backup excluded.
+func (r *runner) restoreRestic(ctx context.Context, res *jobcfg.Result) error {
+	rs := r.cfg.Restore
+	if rs == nil {
+		return fmt.Errorf("restore options missing from config")
+	}
+	if r.cfg.Spec.Source.Files == nil {
+		return fmt.Errorf("source.files is not set")
+	}
+	snap, err := r.resticResolve(ctx, rs.From)
+	if err != nil {
+		return err
+	}
+	res.Snapshot = snap.ShortID
+	res.Files, res.Bytes = snap.Summary.TotalFilesProcessed, snap.Summary.TotalBytesProcessed
+	dst, err := r.sourceRoot()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	args := []string{"restore", snap.ID, "--target", dst}
+	for _, p := range rs.Paths {
+		rel, err := cleanRel(p)
+		if err != nil {
+			return err
+		}
+		// Anchored at the snapshot root ("/" prefix) so only the requested path matches, never a same-named
+		// directory elsewhere in the tree.
+		args = append(args, "--include", "/"+rel)
+	}
+	if rs.Delete {
+		args = append(args, "--delete")
+		for _, e := range r.cfg.Spec.Source.Files.Exclude {
+			args = append(args, "--exclude", e)
+		}
+	}
+	r.logf("restic restore %s -> %s", snap.ShortID, dst)
+	if _, err := r.resticRun(ctx, "", args...); err != nil {
+		return err
+	}
+	res.Message = "restored restic snapshot " + snap.ShortID
+	return nil
+}
+
+// The verify checks below follow the same schedule as the plain engine's file walk: prove the newest
+// snapshot decodes, without needing the source volume (verify only mounts the store, read-only, and
+// scratch). Restic never writes to the repository for any of these commands; the scratch volume just
+// holds the index cache, and unlike the backup run there is no lock to clear.
+
+const (
+	// resticVerifySubsets splits the pack data into ten rotating shares: one ISO week checks 1/10 of the
+	// packs, so the whole repository is read within ten weeks even with a monthly verify schedule.
+	resticVerifySubsets = 10
+	resticVerifySamples = 5
+	// resticVerifySampleMax caps a sample file's size: verify streams it twice through memory for the
+	// checksum comparison, and a sample only has to prove decodability, not throughput.
+	resticVerifySampleMax = 4 << 20
+)
+
+// verifyRestic runs restic check, a rotating subset read, and a sample restore compared by checksum
+// against restic's own decode path (dump).
+func (r *runner) verifyRestic(ctx context.Context, res *jobcfg.Result) error {
+	snap, err := r.resticResolve(ctx, "latest")
+	if err != nil {
+		return err
+	}
+	res.Snapshot = snap.ShortID
+	res.Files, res.Bytes = snap.Summary.TotalFilesProcessed, snap.Summary.TotalBytesProcessed
+	r.logf("verifying restic snapshot %s", snap.ShortID)
+	if _, err := r.resticRun(ctx, "", "check"); err != nil {
+		return fmt.Errorf("verify %s: %w", snap.ShortID, err)
+	}
+	_, week := r.now().UTC().ISOWeek()
+	subset := fmt.Sprintf("%d/%d", (week-1)%resticVerifySubsets+1, resticVerifySubsets)
+	if _, err := r.resticRun(ctx, "", "check", "--read-data-subset="+subset); err != nil {
+		return fmt.Errorf("verify %s (read-data-subset %s): %w", snap.ShortID, subset, err)
+	}
+	samples, err := r.resticSamples(ctx, snap.ID)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", snap.ShortID, err)
+	}
+	if err := r.resticSampleChecksums(ctx, snap.ID, samples); err != nil {
+		return fmt.Errorf("verify %s: %w", snap.ShortID, err)
+	}
+	res.Message = fmt.Sprintf("verified restic snapshot %s: check ok, read-data-subset %s, %d sample files checksummed",
+		snap.ShortID, subset, len(samples))
+	return nil
+}
+
+// resticSamples picks up to resticVerifySamples files from the snapshot tree: the smallest first, so the
+// checksum pass costs a bounded amount of memory and time no matter how big the volume is.
+func (r *runner) resticSamples(ctx context.Context, id string) ([]resticNode, error) {
+	out, err := r.resticRun(ctx, "", "ls", id, "--json")
+	if err != nil {
+		return nil, err
+	}
+	var files []resticNode
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var n resticNode
+		if json.Unmarshal([]byte(line), &n) != nil || n.MessageType != "node" || n.Type != "file" {
+			continue
+		}
+		if n.Size > 0 && n.Size <= resticVerifySampleMax {
+			files = append(files, n)
+		}
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].Size < files[j].Size })
+	if len(files) > resticVerifySamples {
+		files = files[:resticVerifySamples]
+	}
+	return files, nil
+}
+
+// resticNode is one line of `restic ls --json` (only snapshot and node lines matter).
+type resticNode struct {
+	MessageType string `json:"message_type"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+}
+
+// resticSampleChecksums restores the sample files into scratch and compares each against the sha256 of
+// the same file streamed through `restic dump`. Two independent read paths through the pack files must
+// agree bit for bit; a corrupted pack fails one of them (or the check that ran first).
+func (r *runner) resticSampleChecksums(ctx context.Context, id string, samples []resticNode) error {
+	if len(samples) == 0 {
+		r.logf("restic verify: no files small enough to sample")
+		return nil
+	}
+	stage := filepath.Join(r.scratch, "restic-verify")
+	if err := os.RemoveAll(stage); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return err
+	}
+	args := []string{"restore", id, "--target", stage}
+	for _, n := range samples {
+		args = append(args, "--include", n.Path)
+	}
+	if _, err := r.resticRun(ctx, "", args...); err != nil {
+		return err
+	}
+	for _, n := range samples {
+		restored := filepath.Join(stage, filepath.FromSlash(strings.TrimPrefix(n.Path, "/")))
+		h, err := fileSHA256(restored)
+		if err != nil {
+			return fmt.Errorf("%s: %w", n.Path, err)
+		}
+		out, err := r.resticRun(ctx, "", "dump", id, n.Path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", n.Path, err)
+		}
+		if got := sha256Hex([]byte(out)); got != h {
+			return fmt.Errorf("%s: restored file sha256 %s, dump produced %s", n.Path, h, got)
+		}
+	}
+	r.logf("restic verify: %d sample files restored and checksummed", len(samples))
+	return nil
+}
+
+// fileSHA256 streams a file through sha256 and returns the lowercase hex digest.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// sha256Hex is fileSHA256 for bytes already in memory.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
