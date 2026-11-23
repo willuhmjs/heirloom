@@ -10,11 +10,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /backshots ./cmd
+# restic is built from source (pinned tag, verified via the checksum database) rather than taken from apk:
+# the package is linked against musl, and a postgres mover runs inside the user's postgres image with only
+# these binaries copied in via `backshots install` — it has to be a static binary to run there.
+RUN GOBIN=/restic CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go install github.com/restic/restic/cmd/restic@v0.18.1
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
-# restic and sqlite are what the movers shell out to; restic stores every backup as a repository
-# No ssh: data only travels over NFS mounts.
-RUN apk add --no-cache sqlite ca-certificates restic
+# sqlite is what the sqlite movers shell out to; restic stores every backup as a repository and is copied
+# in from the build stage. No ssh: data only travels over NFS mounts.
+RUN apk add --no-cache sqlite ca-certificates
+COPY --from=build /restic/restic /usr/bin/restic
 # The runner passes --insecure-no-password to every restic command (needs restic >= 0.17), so fail the build
 # here rather than every restic backup run at once. Also proves the binary is functional, not just installed.
 RUN restic version && restic --insecure-no-password --repo /tmp/restic-probe init && rm -rf /tmp/restic-probe

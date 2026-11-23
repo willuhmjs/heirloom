@@ -178,7 +178,8 @@ flowchart LR
   false when a backup is *overdue*, which is what an unreachable NAS looks like.
 - Kubernetes Events and Prometheus metrics (`backshots_policy_healthy`, last success, snapshot size, last verify)
   are there for alerting.
-- The runner image installs restic (Alpine's 0.18.1 at the time of writing) and the Dockerfile fails the build if
+- The runner image ships restic 0.18.1, built from the pinned tag with `CGO_ENABLED=0` so the same static
+  binary also runs inside the postgres mover image, and the Dockerfile fails the build if
   restic cannot init a repository, so the pinned feature set is enforced at build time. For sqlite and postgres
   verify and restore, `/scratch` must be big enough to hold the restored payloads — set
   `pod.scratchStorageClassName` for large databases.

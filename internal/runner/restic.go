@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/willuhmjs/backshots/internal/snapshot"
@@ -22,11 +23,24 @@ import (
 // than a whole new copy. The tradeoff, stated plainly: the store folder is no longer browsable;
 // getting data back needs restic.
 //
-// Every flag and JSON field used here was verified against restic 0.18.1, the package the runner
-// image installs (the Dockerfile fails the build if it ever ships an older one). Do not add a flag
+// Every flag and JSON field used here was verified against restic 0.18.1, the version the runner image
+// builds in (the Dockerfile fails the build if it ever ships an older or broken one). Do not add a flag
 // without checking `restic <cmd> --help` against that version.
 
 const resticDirName = "restic"
+
+// resticBin is the restic binary to exec: the copy `backshots install` leaves next to this executable
+// when the mover runs inside the user's postgres image (which ships no restic), else the one on PATH.
+// Static and version-identical either way, so behaviour cannot drift between mover container images.
+var resticBin = sync.OnceValue(func() string {
+	if self, err := os.Executable(); err == nil {
+		sibling := filepath.Join(filepath.Dir(self), "restic")
+		if _, err := os.Stat(sibling); err == nil {
+			return sibling
+		}
+	}
+	return "restic"
+})
 
 // resticRepo is this policy's repository inside its own mounted store directory. Per-policy repositories
 // it keeps the operator's tenant isolation: a mover only ever sees its own folder of the export.
@@ -47,7 +61,7 @@ func (r *runner) resticBase() []string {
 
 // resticRun runs one restic command with the base flags; dir is its working directory.
 func (r *runner) resticRun(ctx context.Context, dir string, args ...string) (string, error) {
-	out, _, err := run(ctx, proc{env: os.Environ(), dir: dir}, "restic", append(r.resticBase(), args...)...)
+	out, _, err := run(ctx, proc{env: os.Environ(), dir: dir}, resticBin(), append(r.resticBase(), args...)...)
 	return out, err
 }
 

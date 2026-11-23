@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	_ "time/tzdata" // the runtime image has no zoneinfo; policies may set spec.timeZone
 
@@ -135,7 +137,16 @@ func runInstall(args []string) error {
 	if err != nil {
 		return err
 	}
-	return copyExecutable(self, args[0])
+	if err := copyExecutable(self, args[0]); err != nil {
+		return err
+	}
+	// The runner shells out to restic, and a mover running the user's postgres image has no restic of
+	// its own: ship it as a sibling of the installed binary, which is where the runner looks first.
+	restic, err := exec.LookPath("restic")
+	if err != nil {
+		return nil // dev machines without restic installed; image builds always have it (Dockerfile probes it)
+	}
+	return copyExecutable(restic, filepath.Join(filepath.Dir(args[0]), "restic"))
 }
 
 func copyExecutable(src, dst string) error {
