@@ -2,8 +2,8 @@ apiVersion: v2
 name: backshots
 description: Kubernetes-native backups that land as deduplicated restic repositories on your NAS. App-consistent Postgres and SQLite dumps, GFS retention with prune, restores that are tested.
 type: application
-version: 0.1.0
-appVersion: 0.1.0
+version: 0.2.0
+appVersion: 0.2.0
 kubeVersion: ">=1.29.0-0"
 home: https://willuhmjs.github.io/backshots/
 icon: https://raw.githubusercontent.com/willuhmjs/backshots/main/docs/assets/logo.svg

@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1alpha1` and may change between releases.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-23
 
 ### Changed
 - **Breaking:** backups are now restic repositories at `<namespace>/<policy>/restic` on the store, replacing the
@@ -48,4 +48,5 @@ First release.
 - Helm chart (repository on GitHub Pages and OCI), CRD admission validation, a scripted end-to-end test.
 
 [Unreleased]: https://github.com/willuhmjs/backshots/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.2.0
 [0.1.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.1.0
