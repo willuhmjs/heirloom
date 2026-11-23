@@ -5,6 +5,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** backups are now restic repositories at `<namespace>/<policy>/restic` on the store, replacing the
+  plain hardlinked snapshot folders. Deduplication makes large changing datasets cheap — a changed 10 GiB file
+  costs only its changed chunks, and SQLite and Postgres dump sets deduplicate across runs. The repositories are
+  plain local and unencrypted (`--insecure-no-password`): no rest-server, no object storage.
+  - The store folder is no longer browsable. Recover with `restic --repo <ns>/<policy>/restic
+    --insecure-no-password restore latest --target <dir>`, or browse with `ls` and `dump`. Snapshot folders left by
+    earlier builds stay untouched on the store but are no longer read or written.
+  - Retention now maps to `restic forget --keep-* --prune`.
+  - Snapshots are restic hex ids. Status shows the 8-char short id, and `Restore`'s `spec.from` is `latest` or a
+    hex id; timestamp snapshot names are gone.
+  - Verify runs `restic check` plus a rotating `--read-data-subset=N/10` pack read — every byte of the repository
+    within 10 weeks — alongside the per-source content checks: files restore a sample and compare its checksum
+    against `restic dump`, SQLite runs `integrity_check` on every database restored to scratch, Postgres loads the
+    dumps into a throwaway scratch cluster and runs the `spec.verify.sql` assertions.
+  - Every mover pod now mounts `/scratch` (restic cache, staging for SQLite and Postgres restores, scratch Postgres
+    data), so `pod.scratchStorageClassName` matters in all modes and large SQLite or Postgres databases need a real
+    scratch size.
+  - `restore.delete` uses `restic restore --delete` with the backup's excludes passed, so excluded files are never
+    deleted; `delete` together with `paths` is rejected, a restic limitation.
+  - Manual triggers, schedules, suspend and the restore drain/quiesce behaviour are unchanged.
+
 ## [0.1.0]
 
 First release.

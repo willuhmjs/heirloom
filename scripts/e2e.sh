@@ -83,7 +83,6 @@ phase() { k -n $NS get restore "$1" -o jsonpath='{.status.phase}'; }
 restore_done() { [[ "$(phase "$1")" == Succeeded || "$(phase "$1")" == Failed ]]; }
 pg() { k -n $NS exec deploy/postgres -- psql -U postgres "$@"; }
 web() { k -n $NS exec deploy/web -- sh -c "$1"; }
-snapshots() { nfs sh -c "ls /export/$NS/$1 2>/dev/null | grep -v '^\\.' | wc -l" | tr -d ' '; }
 
 step "Cluster, NFS server, operator"
 docker build -q -t "$IMAGE" . >/dev/null
@@ -199,8 +198,11 @@ wait_for "web is running" 120 k -n $NS rollout status deploy/web --timeout=5s
 pg -qc "create database app" -c "create database blog" >/dev/null
 pg -d app -qc "create table users(id int, n text); insert into users select g,'u'||g from generate_series(1,500) g;" >/dev/null
 pg -d blog -qc "create table posts(id int); insert into posts select generate_series(1,20);" >/dev/null
+# big.bin (64 MiB of random bytes, so it neither dedups away nor compresses) is the dedup probe: a later
+# step overwrites a few bytes of it and checks what the second backup actually added to the repository.
 web 'mkdir -p /data/docs/deep /data/media && cd /data && echo hello > docs/a.txt && echo world > docs/deep/b.txt &&
-  dd if=/dev/urandom of=media/blob.bin bs=1k count=256 2>/dev/null && printf "#!/bin/sh\necho hi\n" > run.sh &&
+  dd if=/dev/urandom of=media/blob.bin bs=1k count=256 2>/dev/null && dd if=/dev/urandom of=media/big.bin bs=1M count=64 2>/dev/null &&
+  printf "#!/bin/sh\necho hi\n" > run.sh &&
   chmod 750 run.sh && chown 1000:1000 docs/a.txt run.sh && ln -s docs/a.txt link-to-a &&
   sqlite3 /db/app.db "pragma journal_mode=wal; create table t(id integer primary key, v text); insert into t(v) select value from generate_series(1,300);"' >/dev/null
 
@@ -212,6 +214,16 @@ spec:
   storeRef: nas
   schedule: "@hourly"
   source: {type: files, files: {pvc: files-data}}
+  trigger: {manual: "1"}
+---
+apiVersion: backshots.io/v1alpha1
+kind: BackupPolicy
+metadata: {name: keeper, namespace: $NS}
+spec:
+  storeRef: nas
+  schedule: "@hourly"
+  source: {type: files, files: {pvc: files-data}}
+  retention: {weekly: 1}
   trigger: {manual: "1"}
 ---
 apiVersion: backshots.io/v1alpha1
@@ -255,27 +267,58 @@ spec:
 EOF
 
 step "Backups"
-for p in files sqlite pg; do
+for p in files keeper sqlite pg; do
   wait_for "$p: first backup succeeded and is Healthy" 150 \
     bash -c "[[ \$(kubectl -n $NS get bp $p -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].status}') == True ]]"
 done
 equals "a verify policy that names no database is rejected by the controller" "InvalidSpec" \
   k -n $NS get bp pg-ambiguous -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}'
-check "files snapshot holds the tree under data/" nfs sh -c "ls /export/$NS/files/*/data/docs/a.txt"
-check "files snapshot keeps the symlink" nfs sh -c "test -L /export/$NS/files/*/data/link-to-a"
-equals "files snapshot keeps ownership" "1000:1000" nfs sh -c "stat -c %u:%g /export/$NS/files/*/data/run.sh"
-check "sqlite snapshot holds a database copy" nfs sh -c "ls /export/$NS/sqlite/*/sqlite/app.db"
-check "postgres snapshot holds one dump per database plus the roles" \
-  nfs sh -c "cd /export/$NS/pg/*/postgres && ls app.sql.gz blog.sql.gz globals.sql.gz"
-check "postgres dumps are plain gzipped SQL you can read" nfs sh -c "zcat /export/$NS/pg/*/postgres/app.sql.gz | grep -q 'CREATE TABLE public.users'"
+check "status.lastSnapshot.name is a restic short id" \
+  bash -c "[[ \$(kubectl -n $NS get bp files -o jsonpath='{.status.lastSnapshot.name}') =~ ^[0-9a-f]{8}\$ ]]"
+check "the Healthy message is the restic run summary" bash -c \
+  "kubectl -n $NS get bp files -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].message}' | grep -Eq 'restic snapshot [0-9a-f]{8}: [0-9]+ files, .* added to repository; kept [0-9]+, pruned [0-9]+'"
+check "each policy folder on the export holds a restic repository" nfs sh -c \
+  "for p in files keeper pg sqlite; do test -f /export/$NS/\$p/restic/config || exit 1; done"
+check "...and holds nothing else (no plain snapshot folders)" nfs sh -c \
+  "for p in files keeper pg sqlite; do [ \"\$(ls /export/$NS/\$p)\" = restic ] || exit 1; done"
+check "no timestamp-named snapshot dirs anywhere on the export" nfs sh -c \
+  "! ls /export/$NS/*/ | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'"
+
+step "Dedup: a changed file costs its changes, not its size"
+size_before=$(nfs du -sk /export/$NS/files/restic | cut -f1 | tr -dc 0-9)
+web 'dd if=/dev/zero bs=1 count=4 seek=1048576 conv=notrunc of=/data/media/big.bin 2>/dev/null' >/dev/null
+sha_big=$(web 'sha256sum /data/media/big.bin | cut -d" " -f1')
+k -n $NS patch bp files --type merge -p '{"spec":{"trigger":{"manual":"2"}}}' >/dev/null
+wait_for "second files backup finished" 180 \
+  bash -c "[[ \$(kubectl -n $NS get bp files -o jsonpath='{.status.lastManualSync}') == 2 ]]"
+size_after=$(nfs du -sk /export/$NS/files/restic | cut -f1 | tr -dc 0-9)
+# Content-defined chunking re-stores at most one max-size chunk (8 MiB) plus small metadata for a 4-byte
+# edit, so the repository must grow by well under a fifth of the 64 MiB file; a scheme that copied the
+# whole file into every snapshot would have doubled it.
+check "re-backup grew the restic repository by under 20% of the 64 MiB file" \
+  bash -c "[[ $((size_after - size_before)) -le $((64 * 1024 * 20 / 100)) ]]"
+added=$(k -n $NS get bp files -o jsonpath='{.status.conditions[?(@.type=="Healthy")].message}' | awk '
+  { for (i = 1; i < NF; i++) if ($i == "added" && $(i+1) == "to") {
+      u = $(i-1)
+      m = (u == "B" ? 1 : (u == "KiB" ? 1024 : (u == "MiB" ? 1048576 : (u == "GiB" ? 1073741824 : 0))))
+      printf "%d", $(i-2) * m } }')
+check "...and the run message agrees: little was added to the repository" \
+  bash -c "[[ $added -lt $((64 * 1024 * 1024 * 20 / 100)) ]]"
 
 step "Retention prunes and keeps what it should"
-nfs sh -c "cd /export/$NS/files && for h in 19 20 21; do cp -al \$(ls | grep -v '^\\.' | head -1) 2026-11-22T\${h}-22-00Z; done"
-k -n $NS patch bp files --type merge -p '{"spec":{"trigger":{"manual":"2"}}}' >/dev/null
-wait_for "second manual backup finished" 120 \
-  bash -c "[[ \$(kubectl -n $NS get bp files -o jsonpath='{.status.lastManualSync}') == 2 ]]"
-equals "hourly: 3 keeps exactly three snapshots" "3" snapshots files
-equals "the oldest planted snapshot was pruned" "0" nfs sh -c "ls /export/$NS/files | grep -c 2026-11-22T19-22-00Z || true"
+for v in 2 3; do
+  k -n $NS patch bp keeper --type merge -p "{\"spec\":{\"trigger\":{\"manual\":\"$v\"}}}" >/dev/null
+  if [[ $v == 2 ]]; then
+    wait_for "the mover pod mounts only its policy's slice of the export, plus /scratch" 30 bash -c \
+      "mounts=\$(kubectl -n $NS get pods -l backshots.io/policy=keeper -o jsonpath='{.items[0].spec.containers[?(@.name==\"mover\")].volumeMounts}') &&
+       echo \"\$mounts\" | grep -q '\"mountPath\":\"/store\"' && echo \"\$mounts\" | grep -q '\"subPath\":\"$NS/keeper\"' &&
+       echo \"\$mounts\" | grep -q '\"mountPath\":\"/scratch\"'"
+  fi
+  wait_for "keeper backup $v finished" 120 \
+    bash -c "[[ \$(kubectl -n $NS get bp keeper -o jsonpath='{.status.lastManualSync}') == $v ]]"
+done
+equals "retention {weekly: 1} keeps exactly one snapshot" "1" \
+  k -n $NS get bp keeper -o jsonpath='{.status.snapshotsKept}'
 
 step "Verify restores the snapshot and runs the assertions"
 k -n $NS patch bp pg --subresource=status --type merge -p '{"status":{"lastVerifyScheduleTime":"2020-01-01T00:00:00Z"}}' >/dev/null
@@ -284,6 +327,10 @@ wait_for "postgres verify passed" 180 \
   bash -c "[[ \$(kubectl -n $NS get bp pg -o jsonpath='{.status.lastVerify.ok}') == true ]]"
 wait_for "sqlite verify passed" 120 \
   bash -c "[[ \$(kubectl -n $NS get bp sqlite -o jsonpath='{.status.lastVerify.ok}') == true ]]"
+check "the postgres verify message says check ok" bash -c \
+  "kubectl -n $NS get bp pg -o jsonpath='{.status.lastVerify.message}' | grep -q 'check ok'"
+check "the sqlite verify message says check ok" bash -c \
+  "kubectl -n $NS get bp sqlite -o jsonpath='{.status.lastVerify.message}' | grep -q 'check ok'"
 
 step "Restore: postgres"
 pg -d app -qc "drop table users" >/dev/null
@@ -325,7 +372,37 @@ equals "sqlite rows are back" "300" web 'sqlite3 /db/app.db "select count(*) fro
 equals "sqlite integrity is ok" "ok" web 'sqlite3 /db/app.db "pragma integrity_check"'
 equals "stale WAL and journal files are gone" "0" web 'ls /db | grep -c -e -wal -e -journal || true'
 
+step "Restore: delete semantics, from a snapshot id"
+snap=$(k -n $NS get bp files -o jsonpath='{.status.lastSnapshot.name}')
+web 'echo extra > /data/extra.txt && rm -f /data/link-to-a' >/dev/null
+k apply -f - >/dev/null <<EOF
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata: {name: files-delete, namespace: $NS}
+spec: {policyRef: files, from: $snap, delete: true, scaleDown: [{kind: Deployment, name: web}]}
+EOF
+wait_for "restore by id finished" 180 restore_done files-delete
+equals "restore succeeded" "Succeeded" phase files-delete
+equals "...resolving the restic id it was given" "$snap" k -n $NS get restore files-delete -o jsonpath='{.status.snapshot}'
+wait_for "web is back" 120 k -n $NS rollout status deploy/web --timeout=5s
+check "delete removed the file written after the snapshot" web 'test ! -e /data/extra.txt'
+check "the backed-up symlink is restored" web 'test -L /data/link-to-a'
+equals "restored files keep owner and mode" "1000:1000:750" web 'stat -c %u:%g:%a /data/run.sh'
+equals "the file broken after the snapshot holds snapshot content again" "#!/bin/sh" web 'head -1 /data/run.sh'
+equals "the 64 MiB file round-trips byte for byte" "$sha_big" web 'sha256sum /data/media/big.bin | cut -d" " -f1'
+
 step "Restore safety"
+k apply -f - >/dev/null <<EOF
+apiVersion: backshots.io/v1alpha1
+kind: Restore
+metadata: {name: bad-combo, namespace: $NS}
+spec: {policyRef: files, paths: [docs], delete: true}
+EOF
+wait_for "a restore combining delete with paths fails before touching anything" 60 \
+  bash -c "[[ \$(kubectl -n $NS get restore bad-combo -o jsonpath='{.status.phase}') == Failed ]]"
+check "...and says why" bash -c \
+  "kubectl -n $NS get restore bad-combo -o jsonpath='{.status.message}' | grep -q 'not both'"
+
 k apply -f - >/dev/null <<EOF
 apiVersion: backshots.io/v1alpha1
 kind: Restore

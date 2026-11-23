@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="backshots: Kubernetes-native backups that land as plain files on your NAS" width="100%">
+  <img src="docs/assets/hero.svg" alt="backshots: Kubernetes-native, deduplicated backups that land on your NAS" width="100%">
 </p>
 
 <p align="center">
@@ -20,30 +20,35 @@
 
 ---
 
-**backshots** is a small Kubernetes operator that backs up your volumes and databases to an NFS share as
-**plain files**. No backup server, no object store, no encryption keys, no repository format. Every snapshot is a
-normal folder you can open in Finder, Explorer or `cp -a`. If the operator, the cluster and this project all
-disappeared tomorrow, your data would still be sitting in folders named after timestamps.
+**backshots** is a small Kubernetes operator that backs up your volumes and databases onto one NFS export as
+**restic repositories**. No backup server, no object store, nothing listening on a port — just a plain local restic
+repository per policy on your share. Because every run is **deduplicated**, a changed 10 GiB file costs its changed
+chunks (a few MiB), not a fresh 10 GiB copy; sqlite copies and postgres dumps dedup across runs too. History gets
+dramatically cheaper, so retention can stay generous.
 
 ```text
-nas:/k8s-backup/gitea/gitea-db/2026-11-22T10-00-00Z/postgres/gitea.sql.gz     <- zcat | psql
-nas:/k8s-backup/gitea/gitea-data/2026-11-22T03-00-00Z/data/repositories/...   <- a normal directory tree
+nas:/k8s-backup/gitea/gitea-data/restic/     <- a restic repository (plain local backend)
+nas:/k8s-backup/gitea/gitea-db/restic/       <- the same, for the database
 ```
+
+The repositories are unencrypted and passwordless (`restic --insecure-no-password`) on purpose: no password to lose
+on the worst day of the year. The NFS export's ACL remains the security boundary, same as before.
 
 ## Why you might want it
 
-- **Restore by copying files.** That is the whole recovery story. The operator is a convenience, not a
-  dependency, and there is no tool you must have working on the worst day of your year.
+- **Deduplicated history.** Each run stores only the chunks that changed, so a year of hourly backups costs a
+  fraction of the bytes it used to. The policy's status reports the bytes actually *added* after dedup, so you can
+  watch it working.
 - **Databases done properly.** `pg_dump` and SQLite's online backup, not a hot copy of data files. The dump runs
   inside *your own* Postgres image, so the client always matches the server version.
 - **A backup you have never restored is a guess.** Set a `verify` schedule and backshots restores the latest
   snapshot into a scratch database and runs your SQL assertions. The result is on the policy:
   `VERIFIED true`.
-- **Built for homelabs and small clusters.** One small controller. Hardlink snapshots keep history cheap, and
-  retention (hourly, daily, weekly, monthly) is built in.
-- **Safe by default.** An empty or shrunken volume never overwrites a good history. A snapshot only appears
-  once it is complete. Restores validate everything *before* stopping your app, and undo themselves if you
-  delete them halfway.
+- **Built for homelabs and small clusters.** One small controller, and the repository is a plain local restic repo
+  on your own export — no rest-server, no object storage, no service to run. Retention (hourly, daily, weekly,
+  monthly) is built in.
+- **Safe by default.** An empty or shrunken volume never overwrites a good history. Restores validate everything
+  *before* stopping your app, and undo themselves if you delete them halfway.
 
 ## Quickstart
 
@@ -99,8 +104,8 @@ gitea       gitea-data   files      0 3 * * *   9h     14          true       Tr
 
 Want a backup *now*? Set `spec.trigger.manual: "now-1"` and it runs once. More in [`examples/`](examples).
 
-Sources: **files** (rsync, preserving ownership, ACLs, xattrs and symlinks), **sqlite** (online backup plus an
-integrity check) and **postgres** (per-database plain SQL plus roles).
+Sources: **files** (`restic backup` from the volume root, subPath and excludes honored), **sqlite** (online backup
+plus an integrity check) and **postgres** (`pg_dump` per database plus `pg_dumpall` globals).
 
 ## Restore
 
@@ -110,29 +115,33 @@ kind: Restore
 metadata: {name: gitea-db-oops, namespace: gitea}
 spec:
   policyRef: gitea-db
-  from: latest                           # or a snapshot name, e.g. 2026-11-22T10-00-00Z
+  from: latest                           # or a restic snapshot hex id, e.g. 4a1c9f2e
   databases: [gitea]
   scaleDown: [{kind: Deployment, name: gitea}]   # stopped first, started again afterwards
 ```
 
 ```console
 $ kubectl get restores -n gitea          # example output
-NAME             POLICY     FROM                   PHASE       MESSAGE
-gitea-db-oops    gitea-db   2026-11-22T10-00-00Z   Succeeded
+NAME             POLICY     FROM       PHASE       MESSAGE
+gitea-db-oops    gitea-db   4a1c9f2e   Succeeded
 ```
 
 Before it touches anything it checks `from`, paths, database names and that the PVCs exist, and fails with a
 message while your app is still running. Restores of one policy queue. If your workload will not stop, it gives
 up and starts it again. Delete the `Restore` mid-flight and your workloads come back. Flux is told not to fight
-it. A files restore can be one directory (`paths:`), or into a different PVC (`targetPVC:`).
+it. Restores write straight back onto the volume (subPath-aware) via restic's `--include`; a files restore can be
+one directory (`paths:`), or into a different PVC (`targetPVC:`). `delete:` maps to `restic restore --delete` and
+carries the backup's exclude patterns so excluded files are never removed — `delete` together with `paths` is
+rejected, because restic cannot mix include and exclude.
 
-**Or skip all of that** and copy files, which is the point:
+**Getting at the store by hand.** The store is not browsable: snapshots live inside restic's pack format, so there
+are no timestamp folders to open in Finder and nothing to `cp -a`. This is the price of dedup — you trade folders
+you can eyeball for history that costs a fraction of the disk. For day-to-day recovery you create a `Restore` CR.
+To pull data manually, use the restic binary that ships in the mover image:
 
 ```sh
-# one file
-cp -a /mnt/nas/gitea/gitea-data/2026-11-22T03-00-00Z/data/repositories/me/app.git/config ./
-# a database
-zcat /mnt/nas/gitea/gitea-db/2026-11-22T10-00-00Z/postgres/gitea.sql.gz | psql -d postgres
+restic -r /mnt/nas/gitea/gitea-data/restic --insecure-no-password restore latest --target ./recovered
+# also: snapshots, ls, and dump to read a single file
 ```
 
 Step-by-step procedures for a file, a directory, a SQLite database, a Postgres database, a whole PVC and a whole
@@ -146,42 +155,58 @@ flowchart LR
     direction LR
     P[BackupPolicy<br/>one per app] --> C((backshots<br/>controller))
     R[Restore] --> C
-    C -- "one Job per due run" --> J["mover pod<br/>rsync · pg_dump · sqlite3"]
+    C -- "one Job per due run" --> J["mover pod<br/>restic · pg_dump · sqlite3"]
     V[(PVC)] --> J
     D[(Postgres)] --> J
   end
-  J -- "plain files, NFS" --> N[("NAS<br/>namespace/policy/timestamp/")]
+  J -- "restic repo, NFS" --> N[("NAS<br/><namespace>/<policy>/restic/")]
 ```
 
 - The controller schedules runs itself and creates one Job per due run. Each mover pod mounts *only its own
-  policy's folder* of the share, and your PVC. Nothing else is visible to it.
-- A run builds `.incomplete-<time>/`, then renames it to `<time>/` in one atomic step. Files are hardlinked to the
-  previous snapshot, so unchanged data costs nothing. Retention then prunes by hourly, daily, weekly and monthly
-  counts.
-- Status flows back through the pod's termination message: `kubectl get bp` shows the last snapshot, its size, the
-  next run, whether it verified, and a `Healthy` condition that also turns false when a backup is *overdue*, which
-  is what an unreachable NAS looks like.
+  `<namespace>/<policy>` folder* of the export, its PVC, and a `/scratch` volume for restic's cache and staging.
+  Nothing else is visible to it.
+- A run commits into the policy's restic repository: files are added with `restic backup` from the volume root, and
+  sqlite copies and postgres dumps are staged in a transient `.staging/` folder then committed. Retention runs
+  `restic forget --keep-hourly/.../weekly/monthly --prune`, and the policy's `Healthy` message reports snapshots
+  kept and pruned and the bytes actually **added** after dedup.
+- `verify` runs `restic check` plus a rotating read of pack data (`--read-data-subset=N/10`, so the whole
+  repository is read within ten weeks), then per source: files are restored and checksum-compared against
+  `restic dump`; every sqlite database gets `PRAGMA integrity_check`; postgres dumps are loaded into a throwaway
+  Postgres on scratch and your `verify.sql` assertions run against them.
+- Status flows back through the pod's termination message: `kubectl get bp` shows the last snapshot (restic's
+  short hex id), the bytes it added, the next run, whether it verified, and a `Healthy` condition that also turns
+  false when a backup is *overdue*, which is what an unreachable NAS looks like.
 - Kubernetes Events and Prometheus metrics (`backshots_policy_healthy`, last success, snapshot size, last verify)
   are there for alerting.
+- The runner image installs restic (Alpine's 0.18.1 at the time of writing) and the Dockerfile fails the build if
+  restic cannot init a repository, so the pinned feature set is enforced at build time. For sqlite and postgres
+  verify and restore, `/scratch` must be big enough to hold the restored payloads — set
+  `pod.scratchStorageClassName` for large databases.
 
 The longer version, with every behaviour and its limits, is in [`docs/REFERENCE.md`](docs/REFERENCE.md).
+
+## Upgrading from an earlier build
+
+Policies keep working and keep their schedules; the next backup simply creates the policy's restic repository. The
+old plain hardlinked snapshot folders are left untouched but are no longer read or written, so you can delete them
+once you no longer need them. Backups are restic now, always — there is no toggle.
 
 ## Compared to other tools
 
 | | backshots | VolSync | k8up | Velero |
 |---|---|---|---|---|
-| Backup format | plain files you can browse | restic or rclone repository | restic repository | Kopia/restic repository |
-| Needs an object store | no, an NFS share | restic/S3 or similar | S3 or similar | yes, S3-compatible |
-| Readable without the tool | yes | no | no | no |
+| Backup format | restic repository on NFS (local backend) | restic or rclone repository | restic repository | Kopia/restic repository |
+| Needs an object store or server | no, an NFS share | restic/S3 or similar | S3 or similar | yes, S3-compatible |
+| Readable without the tool | no — needs the restic binary | no | no | no |
 | Database-consistent dumps | built in (Postgres, SQLite) | bring your own hook | pre-backup command | hooks |
 | Built-in restore testing | yes (`verify`) | no | no | no |
 | Backs up Kubernetes objects | no, use GitOps | no | no | yes, its main job |
 | Encryption | none, by design | yes | yes | yes |
 | Maturity | **alpha** | mature | mature | very mature |
 
-Velero is the right answer when you must move whole clusters and namespaces around. VolSync and k8up are the
-right answer when you want deduplicated, encrypted, off-site repositories. backshots is for when you want your
-backups to be boring folders on a box you own.
+Velero is the right answer when you must move whole clusters and namespaces around. VolSync and k8up are the right
+answer when you want encrypted, off-site repositories in object storage. backshots is for when you want
+deduplicated restic repositories on a box you own, with no service to run.
 
 ## Status: alpha, and honest about it
 
@@ -200,16 +225,16 @@ Known limits are listed in [`docs/REFERENCE.md`](docs/REFERENCE.md#limitations);
 
 ## FAQ
 
-**Why NFS?** It is the one protocol where hardlinks, ownership and symlinks work, and nearly every NAS speaks it.
-SMB loses ownership and symlinks; object stores have neither.
+**Why NFS?** It is the one protocol that nearly every NAS speaks and that restic can write to directly as a local
+backend, with ownership and symlinks intact. SMB loses ownership and symlinks; object stores have neither.
 
-**Why not encrypt?** No keys to lose on the worst day, and the backups stay readable by anything. The tradeoff:
-whoever can read the share can read your data, so lock the export down to your nodes. If you need encryption at
-rest, encrypt the volume on the NAS.
+**Why not encrypt?** No password to lose on the worst day, and no key to misplace when you need the data most. The
+tradeoff: whoever can read the share can read your data, so lock the export down to your nodes. If you need
+encryption at rest, encrypt the volume on the NAS.
 
-**What if the operator is down?** Scheduled runs pause until it is back (it then runs a missed slot once), and
-the policy turns `Healthy=False/Stale` if too long passes. Your existing snapshots are untouched and restorable by
-hand.
+**What if the operator is down?** Scheduled runs pause until it is back (it then runs a missed slot once), and the
+policy turns `Healthy=False/Stale` if too long passes. Your existing snapshots are untouched and restorable by hand
+with the restic binary.
 
 **Does it back up my Deployments, Secrets and CRDs?** No. Keep those in git (Flux, Argo CD) and back up the
 *data* here.
@@ -218,9 +243,8 @@ hand.
 
 ## Ideas, not promises
 
-A generic "run this command and keep its output" source for MySQL, MongoDB and friends. Checksum manifests so
-snapshots can be audited. A second copy to another share. Pull requests and issues are welcome, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+A generic "run this command and keep its output" source for MySQL, MongoDB and friends. A second copy to another
+share. Pull requests and issues are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Development
 

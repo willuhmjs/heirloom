@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>backshots: Kubernetes-native backups that land as plain files on your NAS</title>
-<meta name="description" content="A small Kubernetes operator that backs up your volumes and databases to an NFS share as plain, browsable files. App-consistent Postgres and SQLite, hardlink snapshots, retention, and restore tests built in.">
+<title>backshots: Kubernetes-native, deduplicated backups that land on your NAS</title>
+<meta name="description" content="A small Kubernetes operator that backs up your volumes and databases to one NFS export as deduplicated restic repositories. App-consistent Postgres and SQLite, retention, and restore tests built in. No server, no keys.">
 <link rel="icon" href="logo.svg">
 <style>
   :root{--bg:#0b1220;--panel:#111c33;--line:#1e3357;--text:#e2e8f0;--mute:#94a3b8;--a:#2dd4bf;--b:#60a5fa}
@@ -38,8 +38,8 @@
 <body>
 <header><div class="wrap">
   <div class="brand"><img src="logo.svg" alt=""><h1>backshots</h1></div>
-  <p class="tag">Kubernetes-native backups that land as plain files on your NAS. Browse them, copy them, restore them. No keys, no S3, no special tooling.</p>
-  <div class="pills"><span class="pill">plain files, no keys</span><span class="pill">app-consistent databases</span><span class="pill">restores that are tested</span></div>
+  <p class="tag">Kubernetes-native backups that land on your NAS as deduplicated restic repositories. No keys, no S3, no backup service to run.</p>
+  <div class="pills"><span class="pill">dedup, no keys</span><span class="pill">app-consistent databases</span><span class="pill">restores that are tested</span></div>
   <div class="btns"><a class="btn p" href="#install">Install with Helm</a><a class="btn s" href="https://github.com/willuhmjs/backshots">GitHub</a><a class="btn s" href="https://github.com/willuhmjs/backshots/blob/main/docs/REFERENCE.md">Docs</a></div>
 </div></header>
 
@@ -83,22 +83,28 @@ gitea       gitea-data  files      0 3 * * *   9h     14          true       Tru
 
 <section>
   <h2>What you get on the NAS</h2>
-<pre class="tree">gitea/gitea-db/2026-11-22T10-00-00Z/postgres/gitea.sql.gz   <span class="cm"># plain SQL: zcat | psql</span>
-gitea/gitea-db/2026-11-22T10-00-00Z/postgres/globals.sql.gz <span class="cm"># roles</span>
-gitea/gitea-data/2026-11-22T03-00-00Z/data/...               <span class="cm"># a normal directory tree</span></pre>
-  <p>Every folder is a complete snapshot. Unchanged files are hardlinked, so history is cheap. If the operator
-  vanished tomorrow you would still restore with <code>cp</code> and <code>psql</code>.</p>
+<pre class="tree">gitea/gitea-db/restic/                          <span class="cm"># one restic repository per policy, plain local backend</span>
+gitea/gitea-db/restic/data/...                  <span class="cm"># content-addressed packs: where the space goes</span>
+gitea/gitea-data/restic/                        <span class="cm"># the same, for the files</span></pre>
+<pre><button class="copy" onclick="cp(this)">copy</button><span class="cm"># recovery by hand, with the restic binary that ships in the mover image</span>
+restic -r gitea/gitea-data/restic --insecure-no-password restore latest --target ./recovered</pre>
+  <p>Each repository is deduplicated: a changed 10 GiB file costs its changed chunks, not a fresh copy,
+  and database dumps dedup across runs too — status reports the bytes actually added, so you can watch
+  it work. The honest cost: the folders are restic packs, not files to browse — individual files come
+  back with <code>restic ls</code> and <code>restic dump</code>, or a <code>Restore</code>. If the operator
+  vanished tomorrow you would still restore with any restic binary.</p>
 </section>
 
 <section>
   <h2>Why it is different</h2>
   <div class="grid">
-    <div class="card"><h3>Plain files</h3><p>No repository format, no encryption keys, no object store to run. The backup is the thing you can open in your file manager.</p></div>
+    <div class="card"><h3>Deduplicated history</h3><p>Backups are restic repositories on your export. A changed 10 GiB file costs its changed chunks, sqlite copies and pg_dump dumps dedup across runs, so retention stays affordable on a home NAS.</p></div>
+    <div class="card"><h3>No service, no keys</h3><p>Plain local backend: no rest-server, no object store, nothing listening on a port. Unencrypted by design — the NFS export's ACL is the security boundary, so there is no key to lose.</p></div>
     <div class="card"><h3>Consistent databases</h3><p>pg_dump and SQLite's online backup, run in your own database image so versions always match. Not a hot copy of data files.</p></div>
-    <div class="card"><h3>Proven restorable</h3><p>Verify jobs restore the latest snapshot into a scratch database and run your SQL assertions. A backup you never restored is a guess.</p></div>
+    <div class="card"><h3>Proven restorable</h3><p>Verify jobs run <code>restic check</code> plus a rotating read of the whole repository within ten weeks, load your dumps into a scratch database and run your SQL assertions. A backup you never restored is a guess.</p></div>
     <div class="card"><h3>Restores you can kubectl</h3><p>Apply a Restore. It checks inputs first, stops your app, restores, starts it again, and undoes itself if you delete it halfway.</p></div>
-    <div class="card"><h3>Built-in retention</h3><p>Hourly, daily, weekly and monthly counts per policy, pruned atomically. A snapshot only appears once it is complete.</p></div>
-    <div class="card"><h3>Small and honest</h3><p>One small controller. Tenant isolation on the share, authenticated metrics, health you can alert on. Alpha software, tested end to end.</p></div>
+    <div class="card"><h3>Built-in retention</h3><p>Hourly, daily, weekly and monthly counts per policy, applied with <code>restic forget --prune</code>. A snapshot only appears once the run is complete.</p></div>
+    <div class="card"><h3>Small and honest</h3><p>One small controller. Tenant isolation on the share — each mover only ever sees its own folder. Alpha software, tested end to end.</p></div>
   </div>
 </section>
 </main>

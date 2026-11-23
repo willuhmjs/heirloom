@@ -1,9 +1,9 @@
 apiVersion: backshots.io/v1alpha1
 kind: Restore
 metadata:
-  name: gitea-data-restore-nov20
+  name: gitea-data-inspect
   namespace: gitea
 spec:
   policyRef: gitea-data
-  from: 2026-11-20T02-30-00Z
+  from: latest          # or a snapshot id from status, e.g. 4f3a1b7c
   targetPVC: gitea-data-scratch   # restore somewhere safe to inspect first

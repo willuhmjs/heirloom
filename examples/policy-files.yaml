@@ -4,7 +4,7 @@ metadata:
   name: gitea-data
   namespace: gitea
 spec:
-  storeRef: default
+  storeRef: default   # backups land in a restic repository on the store, at <namespace>/<policy>/restic
   schedule: "30 2 * * *"
   source:
     type: files

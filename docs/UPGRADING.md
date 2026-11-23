@@ -29,6 +29,16 @@ The manager is a single Deployment with leader election. Restarting it:
 - resumes any `Restore` from its recorded phase (everything is derived from `status` and the restore Job, so a
   restart mid-restore is safe).
 
+## Upgrading to the restic build
+
+This release changes how data lands on the store: every policy's backups become a restic repository under
+`<namespace>/<policy>/restic/`. Nothing is migrated or deleted. The first backup after the upgrade creates the
+repository; snapshot folders left by earlier builds are no longer read or written, so anything you might still
+want from them should be copied off (they are still plain folders, and only the old build can restore them).
+Rolling back afterwards means the old build ignores the repository and its retention; old-style folders it does
+see behave as before.
+
 ## Rolling back
 
-Install the previous chart version. Snapshots on the NAS are plain folders and are never rewritten by an upgrade.
+Install the previous chart version. The store is only ever written by mover pods, so an upgrade or rollback
+never rewrites existing data; new writes simply take the new (or old) form.

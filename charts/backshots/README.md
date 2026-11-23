@@ -1,6 +1,6 @@
 # backshots
 
-Kubernetes-native backups that land as plain files on your NAS.
+Kubernetes-native backups that land as deduplicated restic repositories on your NAS.
 
 ```sh
 helm repo add backshots https://willuhmjs.github.io/backshots

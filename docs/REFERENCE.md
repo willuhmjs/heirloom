@@ -14,13 +14,13 @@ For the overview and a five-minute start, see the [README](../README.md). Restor
   | backshots | -----------------------------------------> | mover Job pod    |
   | manager   |   (own scheduler: cron slots, no CronJob)  |  /source  PVC    |
   +-----------+                                            |  /store   NFS    |
-        ^                                                  +--------+---------+
-        | status via pod termination message                          |
+        ^                                                  |  /scratch          |
+        | status via pod termination message                +--------+---------+
         +-------------------------------------------------------------+
-                                                       rsync / sqlite3 / pg_dump
-                                                                       |
-                                                                       v
-                                                         NAS: <ns>/<policy>/<snapshot>/
+                                            restic / sqlite3 / pg_dump
+                                                                        |
+                                                                        v
+                                                          NAS: <ns>/<policy>/restic/
 ```
 
 The manager is the scheduler. Each reconcile it checks whether a cron slot of a policy has passed since the
@@ -30,17 +30,24 @@ prunes old finished Jobs (keeps 3 succeeded and 3 failed per role), and reads re
 termination messages. It never mounts the store. **If the manager is down, scheduled runs pause**; when it
 returns it runs a missed slot once, not once per missed slot, and a policy turns `Healthy=False/Stale` if
 too long passes without a success.
-Mover pods mount the NFS export and the PVC directly and run the backshots binary (`backshots run`),
-which is copied in by an init container so database images (for example `postgres:16`) can be used
-unchanged.
+
+Mover pods mount the PVC and only their own `<namespace>/<policy>` directory of the NFS export (a `subPath`
+mount, so one mover never sees another's backups) plus a scratch volume, and run the backshots binary
+(`backshots run`), which is copied in by an init container so database images (for example `postgres:16`)
+can be used unchanged. The runner image ships `restic`, which the Dockerfile probes at build time.
+
+Backups are restic repositories, exclusively: each policy's backups are one restic repository at
+`<store>/<namespace>/<policy>/restic/` on the export, plain local backend — no rest-server, no object
+storage, no extra service, nothing listening on a port. Repositories are unencrypted and passwordless
+(`--insecure-no-password`) by design; the NFS export's ACL is the security boundary (see Security).
 
 Source types:
 
 | type | method |
 |---|---|
-| `files` | `rsync -aHAX` of the PVC, hardlinked against the previous snapshot |
-| `sqlite` | consistent copy per database with the SQLite online backup API |
-| `postgres` | `pg_dump` per database plus globals, run inside the image you name |
+| `files` | `restic backup .` from the volume root (or the `subPath` root), excludes via restic `--exclude` |
+| `sqlite` | consistent copy per database with the SQLite online backup API, staged under `.staging` then committed into the repository |
+| `postgres` | `pg_dump` `.sql.gz` per database plus `globals.sql.gz`, staged under `.staging` then committed into the repository |
 
 ## On-disk layout
 
@@ -48,15 +55,31 @@ Source types:
 /volume1/k8s-backup/
   gitea/                              namespace
     gitea-data/                       policy
-      2026-11-20T02-30-00Z/           complete snapshot (plain copy of the data)
-      2026-11-21T02-30-00Z/
-      2026-11-22T02-30-00Z/
-        _status.json
-      .incomplete-2026-11-23T02-30-00Z/   run in progress or crashed; ignored and cleaned up
+      restic/                         the policy's restic repository (plain local backend)
+        config                        repository config
+        keys/                         the empty password, stored by design
+        data/                         content-addressed packs; nearly all of the space
+        index/                        snapshot indexes
+        snapshots/                    snapshot metadata
+      .staging/                       transient: staged sqlite copies and pg_dump dumps,
+                                      swept at the start of the next run
 ```
 
-A snapshot directory appears only through an atomic rename of a finished `.incomplete-` directory, so
-every visible folder is complete.
+The repository layout is restic's internal format: treat `data/`, `index/`, `keys/`, `snapshots/` and
+`config` as read-only to humans, and expect the policy folder's size to be dominated by `data/`.
+
+Benefit, stated plainly: content-addressed dedup with pack storage. A changed file costs only its changed
+chunks, and sqlite copies and pg_dump dumps dedup across runs, so hourly retention of a large changing
+volume stays affordable. Cost, equally plainly: the store folder is not browsable. Recovery of individual
+files uses the restic binary (`snapshots`, `ls`, `dump`, `restore`, always with `--insecure-no-password
+-r <ns>/<policy>/restic`).
+
+### Upgrading from the old plain-snapshot layout
+
+Old plain snapshot folders under a policy (timestamp-named copies with `_status.json` and
+`.incomplete-`/`.deleting-` directories) are left in place and untouched; nothing reads them anymore. The
+first backup of the policy creates the restic repository beside them. Delete the old folders yourself when
+you no longer need them.
 
 ## Quickstart
 
@@ -90,49 +113,79 @@ Nodes need an NFS client (`nfs-common` / `nfs-utils`).
 
 ## Retention
 
-Retention is GFS: keep the newest snapshot of each of the last N hours, days, ISO weeks and months
-(defaults hourly 24, daily 30, weekly 12, monthly 24). The newest snapshot is always kept. A policy
-overrides the store default. Pruning runs at the end of each successful backup.
+`spec.retention` (`keepHourly`/`keepDaily`/`keepWeekly`/`keepMonthly`) maps directly to
+`restic forget --keep-hourly ... --prune` at the end of each successful backup. Zero or unset counts are
+not passed. Defaults hourly 24, daily 30, weekly 12, monthly 24; a policy overrides the store default, and
+the newest snapshot is always kept. Retention applies per policy repository only: a run never opens another
+policy's folder.
 
 Tradeoffs, stated plainly:
 
-- `files` snapshots use hardlinks to the previous snapshot, so unchanged files cost no extra space and
-  each kept snapshot looks like a full copy.
-- `sqlite` and `postgres` dumps are rewritten every run. There is no cross-snapshot dedup, so each
-  kept snapshot costs a full copy of the dump. Pick retention counts with that in mind.
-- Hardlinks mean one physical file is shared by many snapshots. Bit rot or an accidental edit to that
-  file changes it in every snapshot that shares it. Backshots does not checksum your store. Keep a
-  second copy of the NAS offsite (Hyper Backup, rclone, a second NAS).
-- A failed run leaves only a `.incomplete-` directory, never a half-written snapshot.
+- Dedup is the model: content-addressed packs mean unchanged files cost no extra space, a changed file
+  costs only its changed chunks, and sqlite copies and pg_dump dumps dedup across runs too. Retention
+  counts can therefore be generous even for large, churning sources.
+- The store folder is not browsable. Individual files come back with the restic binary, not with `ls` and
+  `cp` on the NAS (see Restore).
+- Restic checksums every pack. With `verify.schedule` set, each run reads a rotating tenth of the pack data
+  (`restic check --read-data-subset=N/10`, N rotating by ISO week), so every byte in the repository has
+  been read and verified within ten weeks. Without verify, only structural `restic check` runs happen.
+  Bit rot detected is not a second copy: keep a copy of the NAS offsite anyway (Hyper Backup, rclone, a
+  second NAS).
+- A run publishes its snapshot only at the end, so a failed or killed run leaves no snapshot. Its staged
+  `.staging` tree is swept at the start of the next run, and packs it had already uploaded are
+  unreferenced and removed by the next `forget --prune`.
 
 ## Verify
 
-A policy may set `verify.schedule`. The verify job reads the latest snapshot from the store
-(read-only) and proves it restores:
+A policy may set `verify.schedule`. Every verify run checks the policy's own repository and proves the
+latest snapshot restores:
 
-- `postgres`: initdb a scratch cluster, restore the dump, run each `verify.sql` assertion (each must
-  return `t`) against one database: `verify.database`, or the single database the policy lists. A policy
-  that dumps several databases must name one, otherwise it is rejected (`Ready=False`, `InvalidSpec`)
-  rather than guessing. The scratch volume is an emptyDir, or a generic ephemeral volume of
-  `pod.scratchSize` (default 10Gi) when `pod.scratchStorageClassName` is set.
-- `sqlite`: open each copy and run `PRAGMA integrity_check`.
-- `files`: walk the snapshot and compare against recorded counts.
+- always: `restic check`, plus `restic check --read-data-subset=N/10` where N rotates by ISO week, so the
+  full pack data of the repository is read within ten weeks.
+- `files`: additionally restores the smallest sample files (up to 5, <= 4 MiB each) into scratch and
+  checksum-compares them against `restic dump`.
+- `sqlite`: additionally restores the snapshot to scratch and runs `PRAGMA integrity_check` on every
+  database.
+- `postgres`: additionally loads the restored dumps into a throwaway postgres instance on scratch (fsync
+  off) and runs each `verify.sql` assertion (each must return `t`) against one database: `verify.database`,
+  or the single database the policy lists. A policy that dumps several databases must name one, otherwise
+  it is rejected (`Ready=False`, `InvalidSpec`) rather than guessing.
 
-The result lands in `status.lastVerify` and in metrics. A backup you have never restored is a guess.
+Scratch is an emptyDir, or a generic ephemeral volume of `pod.scratchSize` (default 10Gi) when
+`pod.scratchStorageClassName` is set. The result lands in `status.lastVerify` and in metrics. A backup you
+have never restored is a guess.
 
 ## Restore
 
-By hand: copy the files back. That is the point. See `docs/RESTORE-RUNBOOKS.md`.
+By hand: use the restic binary. Mount the export on any machine that can reach the NAS, or `kubectl exec`
+into a mover pod (the runner image ships `restic`, which the Dockerfile probes at build time), and address
+the repository directly — always with `--insecure-no-password`:
 
-- files: copy the snapshot directory (or a subpath) into the PVC, preserving ownership (`cp -a`, `rsync -aHAX`).
-- sqlite: stop the app, copy the database file over the original, delete any `-wal`/`-shm` files.
-- postgres: `postgres/` in the snapshot holds `globals.sql.gz` and one `<db>.sql.gz` per database, plain SQL
-  made with `--create --clean --if-exists`; load with `gunzip -c <db>.sql.gz | psql -d postgres` (no `pg_restore`).
-- files live under `data/` and sqlite copies under `sqlite/` inside the snapshot directory.
+```sh
+restic -r gitea/gitea-data/restic --insecure-no-password snapshots
+restic -r gitea/gitea-data/restic --insecure-no-password ls latest
+restic -r gitea/gitea-data/restic --insecure-no-password dump latest data/app.db > app.db
+restic -r gitea/gitea-data/restic --insecure-no-password restore latest --target /recovered
+```
+
+Snapshot identity is restic's hex id. Policy status shows the 8-character short id; `from` accepts either
+the short id or the full id. Timestamp snapshot names no longer exist.
+
+What each type does:
+
+- `files`: `restic restore` onto the volume root or the `subPath` root. `paths` restricts the restore via
+  anchored restic `--include` patterns. `delete: true` maps to `restic restore --delete` and passes the
+  backup's exclude patterns as `--exclude`, so excluded paths are never deleted. `delete` with `paths` is
+  rejected by validation: restic refuses include+exclude combinations.
+- `sqlite`: databases are restored from the snapshot into scratch, then swapped onto the volume; stale
+  `-wal`/`-shm`/`-journal` files are removed.
+- `postgres`: `globals.sql.gz` plus the selected (or all) database dumps are loaded via `psql` — plain SQL
+  made with `--create --clean --if-exists`; no `pg_restore`.
 
 With the CR: create a `Restore` next to the policy (see `examples/restore-*.yaml`) and watch
 `kubectl get restores -n <ns>`. It can scale Deployments and StatefulSets to zero first and back
-afterwards, restore a named snapshot or a subpath, and target a different PVC.
+afterwards, restore `from: "latest"` (the default) or a hex id (8-64 characters), and target a different
+PVC.
 
 What it does before it touches anything: it validates `from`, `paths`, `databases`, the name length and that
 every PVC it needs exists, and fails with a message if not, with your workloads still running. Restores of
@@ -152,20 +205,30 @@ excludes.
 | `BackupPolicy` (`bp`) | namespaced | storeRef, schedule, one source, retention, verify, trigger, suspend, pod options |
 | `Restore` (`brs`) | namespaced | policyRef, from, targetPVC, paths, databases, delete, scaleDown |
 
-Notable `BackupPolicy` fields: `timeZone` (IANA zone the schedules run in, default UTC; snapshot names stay
-UTC), `minSourcePercent` (default 50), `activeDeadlineSeconds` (default 3600), `trigger.manual`,
+Notable `BackupPolicy` fields: `timeZone` (IANA zone the schedules run in, default UTC), `minSourcePercent`
+(default 50, 0 disables; see Failure modes), `activeDeadlineSeconds` (default 3600), `trigger.manual`,
 `pod.{resources,nodeSelector,tolerations,priorityClassName,imagePullSecrets,scratchStorageClassName,scratchSize}`.
-Source options: files `exclude` and `skipACLsAndXattrs` (use when the NFS export does not support them);
-postgres `databases`, `excludeDatabases`, `globals` (`full`, `no-role-passwords` for a least-privilege backup
-role, or `skip`). Full schema: `config/crd/` or `kubectl explain backuppolicy.spec`. Specs are validated when
-applied (non-empty fields, `from` format, one source block matching `type`, name length) and again by the
-controller.
+`pod.scratchStorageClassName` affects **every** mover pod, not just verify: restic keeps its chunk cache on
+`/scratch` (falling back to `--no-cache` when there is no scratch dir), sqlite and postgres restores stage
+their payloads through scratch, and the throwaway postgres data dir lives there. Its size is
+`pod.scratchSize` (default 10Gi); the default (unset) is an emptyDir, which consumes node disk — for
+sqlite/postgres policies whose dumps are large, give `/scratch` a storage class.
+Source options: files `exclude` (passed to restic as `--exclude`). (`skipACLsAndXattrs` is gone: it was an
+rsync workaround; restic stores ACLs and extended attributes only where the filesystem has them, so it never
+failed the way rsync did); postgres `databases`, `excludeDatabases`, `globals` (`full`,
+`no-role-passwords` for a least-privilege backup role, or `skip`). Full schema: `config/crd/` or
+`kubectl explain backuppolicy.spec`. Specs are validated when applied (non-empty fields, `from` format —
+`latest` or a hex id of 8-64 chars, one source block matching `type`, name length, `delete` not combined
+with `paths`) and again by the controller.
 
 A manual trigger value can be used again later: setting `trigger.manual` to a value you used before, after a
 different one, runs again.
 
 Status shows `lastSnapshot`, `lastSyncTime`, `lastSyncDuration`, `nextSyncTime`, `snapshotsKept`,
-`lastVerify` and the `Ready` and `Healthy` conditions. `Healthy` is `False` with reason `BackupFailed` when
+`lastVerify` and the `Ready` and `Healthy` conditions. `lastSnapshot.name` holds the 8-character short id of
+the run's restic snapshot. On success the `Healthy` condition carries the run summary, e.g.
+`restic snapshot abc12345: 1043 files, 1.5 GiB processed, 8.2 MiB added to repository; kept 36, pruned 1` —
+the "added to repository" number is the dedup payoff. `Healthy` is `False` with reason `BackupFailed` when
 the latest run failed, and with reason `Stale` when a scheduled run is overdue and no backup has succeeded:
 the grace period is a quarter of the schedule interval, clamped to 5 minutes..6 hours. `Stale` is what
 reports an unreachable NAS promptly, because the stuck pod never finishes and so never reports a failure.
@@ -200,16 +263,18 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 | situation | what happens |
 |---|---|
 | NAS down or unmountable | the mover pod waits in ContainerCreating (kubelet keeps retrying the mount, so it completes by itself once the NAS is back); the policy turns `Healthy=False/Stale` after one overdue run plus grace; nothing is lost on the NAS |
-| NAS full | rsync or dump fails, the `.incomplete-` directory is removed, previous snapshots untouched, run reported failed |
-| source empty or recreated | run aborts when the file count is under `minSourcePercent` of the previous snapshot, so an empty PVC does not become the newest snapshot |
+| NAS full | restic or the dump fails, no snapshot is published, previous snapshots untouched, run reported failed; `.staging` is swept at the start of the next run |
+| source empty or recreated | run fails the guard: the run's snapshot file count is compared against the previous snapshot's (both from restic summaries), and 0 files or a shrink below `minSourcePercent` fails the run; restic itself also refuses to snapshot an empty tree |
 | run longer than the interval | no second run starts while one is active; the due slot runs as soon as it finishes (once), and `activeDeadlineSeconds` kills a stuck run |
 | operator down | a run already in progress finishes, but no new scheduled run starts and status stops updating; on return a missed slot runs once. Alert on `Stale` and on a missing or old `backshots_last_success_timestamp_seconds` |
-| crash mid-run | leftover `.incomplete-` directory is ignored and cleaned on the next run |
+| crash mid-run | no snapshot is published (restic commits it only at the end); the transient `.staging` tree is swept at the start of the next run and packs the killed run uploaded are unreferenced and removed by the next `forget --prune` |
 
 ## Security
 
-- Backups are plaintext. The NAS share ACL is the security boundary. Anyone who can read the export
-  can read every secret in every backed-up volume and dump.
+- Backups are plaintext and the restic repositories are unencrypted and passwordless
+  (`--insecure-no-password`) by design: there is no key to guard, because the NAS share ACL *is* the
+  security boundary. Anyone who can read the export can read every secret in every backed-up volume and
+  dump.
 - Trust model: whoever can create `BackupPolicy` or `Restore` in a namespace is trusted like a namespace
   admin of *that* namespace. They can back up or restore into any PVC there, pass any Secret key of that
   namespace to a pod, run a postgres image of their choosing, and scale that namespace's workloads. Grant
@@ -217,13 +282,16 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
   namespace.
 - Tenant isolation on the store: each mover mounts only its own `<namespace>/<policy>` directory of the
   export (a `subPath` mount), so no mover, including one running a user-chosen image, can see or modify
-  another namespace's backups. User-supplied paths (`subPath`, sqlite `paths`, `Restore.paths`) are
-  resolved with symlinks followed and refused if they leave their volume.
-- **Write access to the NFS export is as powerful as cluster access.** A restore pipes `postgres/*.sql.gz`
-  straight into `psql` (a planted dump can run `COPY ... PROGRAM` or `\!` on the database server, or in the
-  mover as root) and writes snapshot files, including setuid bits and ownership, into a PVC as root. Backshots
-  does not sign or checksum snapshots. Restrict the export to the node IPs, give it no other writers, and
-  consider per-cluster exports. Read access exposes every secret in every backed-up volume.
+  another namespace's backups. A run only ever opens its own policy's repository. User-supplied paths
+  (`subPath`, sqlite `paths`, `Restore.paths`) are resolved with symlinks followed and refused if they
+  leave their volume.
+- **Write access to the NFS export is as powerful as cluster access.** A restore pipes
+  `globals.sql.gz` and the per-database `.sql.gz` dumps straight into `psql` (a planted dump can run
+  `COPY ... PROGRAM` or `\!` on the database server, or in the mover as root) and writes restored files,
+  including setuid bits and ownership, into a PVC as root. Restic's content hashes address data inside the
+  repository; they are not signatures: an attacker who can write the export can plant a whole, internally
+  consistent repository. Restrict the export to the node IPs, give it no other writers, and consider
+  per-cluster exports. Read access exposes every secret in every backed-up volume.
 - Status and Job messages carry the tail of `psql` and `pg_dump` error output. The lines in which PostgreSQL quotes
   data (`DETAIL`, `CONTEXT`, `STATEMENT`, `QUERY`) are removed first, but the primary `ERROR` line is kept and can
   still name a value (for example an invalid input). The messages are visible to anyone who can read the policy in
@@ -241,26 +309,25 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 ## Limitations
 
 - One NFS store per policy. Any namespace can reference any `BackupStore`; each policy still only ever sees
-  its own `<namespace>/<policy>` directory.
-- No dedup across snapshots for database dumps.
-- **A first backup of a large volume can take several runs.** A files run killed at `activeDeadlineSeconds`
-  (default one hour) leaves its partial tree, and the next run adopts it: rsync skips what is already there. Raise
-  the deadline to finish in fewer runs. A run that failed the empty-source check does not leave a tree to resume
-  from. Database sources are dumps and have no partial state; make sure the deadline covers one dump.
+  its own `<namespace>/<policy>` directory, and a policy's run only ever opens its own repository.
+- The store is not browsable. Individual files come back with the restic binary (`restic -r <ns>/<policy>/restic
+  --insecure-no-password dump/restore`), not with `ls` and `cp` on the NAS.
+- **A run must fit in `activeDeadlineSeconds` (default one hour).** A killed run publishes no snapshot, and
+  the next run reads the whole source again; raise the deadline for a first backup of a large volume.
+  Database sources are dumps and have no partial state; make sure the deadline covers one dump.
 - A mover mounts the app's PVC, which is ReadWriteOnce. On a multi-node cluster the mover must land on the node
   that has the volume attached: use `pod.nodeSelector` (or ReadWriteMany storage). Single-node k3s with
   local-path has no such problem.
-- Deleting a `BackupPolicy` deletes its Jobs but **leaves `<namespace>/<policy>` on the NAS**, deliberately:
-  backups outlive their configuration. A policy later created with the same name in the same namespace will
-  continue that history. Delete the directory yourself to start fresh. Deleting a `BackupStore` leaves its
-  policies unable to start new runs until it is back.
-- Retention keeps the newest snapshot of each of the last N hour, day, week and month *buckets that contain a
-  snapshot*, not N time windows. An all-zero `retention` is rejected when applied (`hourly: 1` keeps only the
-  newest snapshot); an absent `retention` means the store's, then the defaults. Snapshot names come from the
-  node clock, so a node whose clock jumped into the future publishes a snapshot that sorts as newest until
-  newer ones pass it; fix the clock and delete that folder.
-- The scheduler pauses while the manager is down (see How it works). Verify and restore read a snapshot by
-  name while a backup may prune an older one: a verify of an explicitly named old snapshot can fail
+- Deleting a `BackupPolicy` deletes its Jobs but **leaves `<namespace>/<policy>` — restic repository
+  included — on the NAS**, deliberately: backups outlive their configuration. A policy later created with
+  the same name in the same namespace continues that history, because the repository is still there.
+  Delete the directory yourself to start fresh. Deleting a `BackupStore` leaves its policies unable to
+  start new runs until it is back.
+- Retention counts mean exactly what `restic forget --keep-hourly/--keep-daily/--keep-weekly/--keep-monthly`
+  means, applied to the policy's own repository only. An all-zero `retention` is rejected when applied
+  (`hourly: 1` keeps only the newest snapshot); an absent `retention` means the store's, then the defaults.
+- The scheduler pauses while the manager is down (see How it works). Verify and restore resolve a snapshot
+  by id while a backup may prune an older one: a verify or restore of an explicitly named old id can fail
   spuriously if it is pruned at that moment.
 - Flux and other GitOps tools: for workloads listed in `scaleDown`, a restore sets
   `kustomize.toolkit.fluxcd.io/reconcile: disabled` while it works and removes it afterwards (only if it
@@ -277,13 +344,17 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 ## Compared to other tools
 
 - **VolSync**: restic/rclone/rsync movers with CSI snapshot support; excellent for encrypted offsite
-  and block-consistent copies. Backshots trades that for a repository you can browse without any tool.
-- **k8up**: restic-based, S3-centric, with its own repository format. Similar operator model.
+  copies and block-consistent replication. Backshots trades that breadth for one NFS export, GFS
+  retention, and a built-in dump-and-verify flow for sqlite and postgres.
+- **k8up**: also restic-based with a similar operator model, but S3-centric with restic profiles and
+  offsite sync. Backshots is the plain local backend on NFS: no provider configuration, nothing listening
+  on a port.
 - **Velero**: cluster-wide object and volume backup with cloud snapshots; far broader scope, much
   heavier, and restores need Velero.
 
-Use those if you need encryption at rest, deduplicated offsite storage or CSI snapshots. Use
-backshots if you have a NAS and want ordinary folders.
+Use those if you need encryption at rest, offsite object storage or CSI snapshots. Use backshots if you
+have one NFS export and want deduplicated, verified backups with no extra services: no rest-server, no
+object storage, nothing to operate besides the operator.
 
 See `docs/DESIGN.md` for design decisions and `docs/RESTORE-RUNBOOKS.md` for recovery procedures.
 

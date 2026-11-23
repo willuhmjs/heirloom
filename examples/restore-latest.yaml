@@ -6,6 +6,6 @@ metadata:
 spec:
   policyRef: gitea-data
   from: latest
-  delete: true          # remove files not in the snapshot
+  delete: true          # remove files not in the snapshot; excluded files are never deleted
   scaleDown:
     - {kind: Deployment, name: gitea}
