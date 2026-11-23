@@ -98,7 +98,7 @@ func dumpGzip(ctx context.Context, p proc, path, name string, args ...string) er
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // the content is durably written by the Sync below
 	cmd := command(ctx, p, name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -114,7 +114,7 @@ func dumpGzip(ctx context.Context, p proc, path, name string, args ...string) er
 	if copyErr != nil {
 		// The destination failed (for example the NAS is full). Stop the dump instead of leaving Wait blocked on a
 		// pipe nobody reads, which would hang until the Job deadline.
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
 	if copyErr != nil {
@@ -139,7 +139,7 @@ func loadDump(ctx context.Context, env []string, file string, tolerant bool) err
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("%s: %w", filepath.Base(file), err)

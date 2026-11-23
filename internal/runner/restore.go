@@ -20,6 +20,11 @@ func (r *runner) restore(ctx context.Context, res *jobcfg.Result) error {
 	if rs == nil {
 		return fmt.Errorf("restore options missing from config")
 	}
+	// A previous run killed mid-flight can leave a stale repository lock; restic's read paths retry the
+	// lock save forever against one, so clear it first. The controller has already excluded a live peer.
+	if err := r.resticUnlock(ctx); err != nil {
+		return err
+	}
 	snap, err := r.resticResolve(ctx, rs.From)
 	if err != nil {
 		return err
@@ -30,6 +35,8 @@ func (r *runner) restore(ctx context.Context, res *jobcfg.Result) error {
 	switch r.cfg.Spec.Source.Type {
 	case v1alpha1.SourceFiles:
 		err = r.restoreFiles(ctx, snap)
+	case v1alpha1.SourceCommand:
+		err = r.restoreCommand(ctx, snap)
 	case v1alpha1.SourceSQLite:
 		var stage string
 		if stage, err = r.stageSnapshot(ctx, snap); err == nil {
@@ -89,11 +96,40 @@ func (r *runner) restoreFiles(ctx context.Context, snap *resticSnapshot) error {
 	return nil
 }
 
+// restoreCommand writes a command source's dumps from the snapshot into the mounted target PVC.
+// There is no universal loader for arbitrary dumps, so the files land under command/ at the volume
+// root and the app's own import tool (mysql, mongorestore, redis-cli --pipe) takes them from there.
+// With paths, only those entries of command/ are restored.
+func (r *runner) restoreCommand(ctx context.Context, snap *resticSnapshot) error {
+	rs := r.cfg.Restore
+	dst := r.source
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	args := []string{"restore", snap.ID, "--target", dst}
+	if len(rs.Paths) > 0 {
+		for _, p := range rs.Paths {
+			rel, err := cleanRel(p)
+			if err != nil {
+				return err
+			}
+			args = append(args, "--include", "/command/"+rel)
+		}
+	} else {
+		args = append(args, "--include", "/command")
+	}
+	r.logf("restic restore %s (command dumps) -> %s", snap.ShortID, dst)
+	if _, err := r.resticRun(ctx, "", args...); err != nil {
+		return err
+	}
+	return nil
+}
+
 // stageSnapshot materializes a sqlite/postgres snapshot's payload into scratch and returns the
 // directory restoreSQLite/restorePostgres read; they expect the staging layout (sqlite/... and
 // postgres/... directly beneath it), which is how the payload was committed. Database restores
-// always go through scratch: the store mount is read-only during restore and verify, and scratch
-// is where the user promised the space (pod.scratchStorageClassName).
+// always go through scratch: it is where the user promised the space
+// (pod.scratchStorageClassName), and the load logic may add journals and temp files beside the dumps.
 func (r *runner) stageSnapshot(ctx context.Context, snap *resticSnapshot) (string, error) {
 	stage := filepath.Join(r.scratch, "restic-restore")
 	if err := os.RemoveAll(stage); err != nil {
@@ -187,14 +223,14 @@ func replaceFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	tmp, err := os.CreateTemp(filepath.Dir(dst), ".backshots-restore-*")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after a successful rename
 	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	// Keep the owner and mode of the database being replaced. A database that did not exist (restore into a new
@@ -209,17 +245,17 @@ func replaceFile(src, dst string) error {
 	if owner != nil {
 		if sys, ok := owner.Sys().(*syscall.Stat_t); ok {
 			if err := tmp.Chown(int(sys.Uid), int(sys.Gid)); err != nil && os.Geteuid() == 0 {
-				tmp.Close()
+				_ = tmp.Close()
 				return err
 			}
 		}
 	}
 	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

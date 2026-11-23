@@ -37,7 +37,7 @@ func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
 	if staging != "" {
 		// Nothing to resume from after success or failure: restic has no partial-tree semantics,
 		// the next run restages.
-		defer os.RemoveAll(staging)
+		defer func() { _ = os.RemoveAll(staging) }()
 	}
 
 	// The guard compares this run against the previous snapshot's file count, read from the repository.
@@ -50,6 +50,19 @@ func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
 		return err
 	}
 	if err := checkGuard(sum.TotalFilesProcessed, prevFiles, r.cfg.Spec.MinSourcePercent); err != nil {
+		// restic has already committed the snapshot by now: a rejected run must not leave it behind.
+		// A committed-but-rejected snapshot would be the repository's newest, so `restore from: latest`
+		// would hand back the shrunken tree, and the next run would compare against it and stay silent
+		// forever. Forget it so history still ends at the last good snapshot; the freed packs are
+		// reclaimed by the next successful run's prune.
+		if sum.SnapshotID != "" {
+			if ferr := r.resticForgetIDs(ctx, sum.SnapshotID); ferr != nil {
+				r.logf("WARNING: could not forget rejected snapshot %s: %v", shortResticID(sum.SnapshotID), ferr)
+				return fmt.Errorf("%w; forgetting it also failed (%v): run `restic forget %s` in %s before restoring anything",
+					err, ferr, sum.SnapshotID, r.resticRepo())
+			}
+			r.logf("forgot rejected snapshot %s; history still ends at the previous good snapshot", shortResticID(sum.SnapshotID))
+		}
 		return err
 	}
 	res.Snapshot = shortResticID(sum.SnapshotID)
@@ -85,7 +98,7 @@ func (r *runner) backupSource(ctx context.Context) (src, staging string, err err
 			return "", "", err
 		}
 		if err := r.captureSQLite(ctx, staging); err != nil {
-			os.RemoveAll(staging)
+			_ = os.RemoveAll(staging)
 			return "", "", err
 		}
 		return staging, staging, nil
@@ -94,7 +107,16 @@ func (r *runner) backupSource(ctx context.Context) (src, staging string, err err
 			return "", "", err
 		}
 		if err := r.capturePostgres(ctx, staging); err != nil {
-			os.RemoveAll(staging)
+			_ = os.RemoveAll(staging)
+			return "", "", err
+		}
+		return staging, staging, nil
+	case v1alpha1.SourceCommand:
+		if staging, err = r.beginStaging(); err != nil {
+			return "", "", err
+		}
+		if err := r.captureCommand(ctx, staging); err != nil {
+			_ = os.RemoveAll(staging)
 			return "", "", err
 		}
 		return staging, staging, nil
@@ -179,8 +201,8 @@ func (r *runner) captureSQLite(ctx context.Context, stage string) error {
 			return fmt.Errorf("%s: %w", rel, err)
 		}
 		if f, err := os.Open(dst); err == nil { // make sure it reached the NFS server
-			f.Sync()
-			f.Close()
+			_ = f.Sync()
+			_ = f.Close()
 		}
 	}
 	return nil

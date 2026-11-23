@@ -18,9 +18,12 @@ import (
 // verify proves the newest snapshot in the policy's restic repository can actually be read back:
 // restic's own structural check, a rotating read of the pack data, and a check that exercises this
 // source type's payload through its real decode path (sample files, integrity_check, a scratch
-// postgres). Verify only mounts the store read-only plus scratch; restic never writes to the
-// repository here and there is no lock to clear.
+// postgres). restic writes nothing but lock files to the repository here; it clears a stale lock from
+// a killed run first, because `restic check` against a stale lock fails instead of waiting.
 func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
+	if err := r.resticUnlock(ctx); err != nil {
+		return err
+	}
 	snap, err := r.resticResolve(ctx, "latest")
 	if err != nil {
 		return err
@@ -36,7 +39,7 @@ func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
 	verified := "check ok, read-data-subset " + subset
 
 	switch r.cfg.Spec.Source.Type {
-	case v1alpha1.SourceFiles:
+	case v1alpha1.SourceFiles, v1alpha1.SourceCommand:
 		n, err := r.resticVerifySampleFiles(ctx, snap.ID)
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
@@ -158,8 +161,8 @@ func (r *runner) verifyPostgres(ctx context.Context, dir string) (err error) {
 	if err := srv.Start(); err != nil {
 		return err
 	}
-	exited := make(chan error, 1)
-	go func() { exited <- srv.Wait() }()
+	exited := make(chan struct{}, 1)
+	go func() { _ = srv.Wait(); exited <- struct{}{} }()
 	defer func() { // fast shutdown, then wait; never block forever (signalling uid 999 as root needs CAP_KILL)
 		if err := srv.Process.Signal(syscall.SIGINT); err != nil {
 			r.logf("stopping scratch postgres: %v", err)
@@ -167,7 +170,7 @@ func (r *runner) verifyPostgres(ctx context.Context, dir string) (err error) {
 		select {
 		case <-exited:
 		case <-time.After(60 * time.Second):
-			srv.Process.Kill()
+			_ = srv.Process.Kill()
 			select {
 			case <-exited:
 			case <-time.After(10 * time.Second):

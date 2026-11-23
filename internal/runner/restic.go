@@ -120,11 +120,22 @@ func (r *runner) resticInit(ctx context.Context) error {
 	return err
 }
 
-// resticUnlock clears locks left behind by a run that was killed mid-flight. Only stale ones matter: the
-// controller guarantees that one policy never has two restic runs at once, and a live peer's lock would
-// have failed this run anyway.
+// resticUnlock clears locks left behind by a run that was killed mid-flight. Only stale ones matter:
+// the controller guarantees that one policy never has two restic runs at once (a Restore waits for
+// active backup/verify Jobs and scheduling pauses while a Restore runs), so any live lock found here
+// belongs to nobody and every mode — backup, verify and restore — clears one before touching the
+// repository.
 func (r *runner) resticUnlock(ctx context.Context) error {
 	_, err := r.resticRun(ctx, "", "unlock")
+	return err
+}
+
+// resticForgetIDs drops the given snapshots from the repository's history without pruning. This is
+// how a committed-but-rejected snapshot is rolled back: leaving its reference in place would keep it
+// the newest thing restic restores from; the freed pack files are reclaimed by the next
+// forget --prune.
+func (r *runner) resticForgetIDs(ctx context.Context, ids ...string) error {
+	_, err := r.resticRun(ctx, "", append([]string{"forget"}, ids...)...)
 	return err
 }
 
@@ -375,7 +386,7 @@ func fileSHA256(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

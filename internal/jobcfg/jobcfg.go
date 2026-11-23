@@ -10,7 +10,7 @@
 //	                         terminationMessagePath=/dev/termination-log, policy FallbackToLogsOnError
 //	volumes (mount paths inside "mover"):
 //	  /store    ONLY this policy's directory of the NFS export (volumeMount subPath <namespace>/<policy>), so a
-//	            mover can never see another namespace's backups (read-only for verify and restore)
+//	            mover can never see another namespace's backups (writable: restic writes repository locks)
 //	  /source   the PVC, files/sqlite only (read-only for files backup, read-write for sqlite and restore)
 //	  /scratch  emptyDir or generic ephemeral volume, verify only
 //

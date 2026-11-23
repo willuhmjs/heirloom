@@ -93,7 +93,7 @@ func TestResticDedup(t *testing.T) {
 	if _, err := f.WriteAt([]byte{0xff}, 12345); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	var res2 jobcfg.Result
 	if err := r.backup(ctx, &res2); err != nil {
@@ -164,6 +164,46 @@ func TestResticGuard(t *testing.T) {
 	} else if _, ok := err.(guardError); !ok {
 		t.Errorf("want guardError, got %T: %v", err, err)
 	}
+
+	// The committed-but-rejected snapshot must be gone from history: `latest` still has to be the
+	// first, complete snapshot, so a restore after a guarded run gets the real data back.
+	if ids := resticSnapshotIDs(t, r, ctx); len(ids) != 1 {
+		t.Fatalf("history = %d snapshots, want the rejected one forgotten (leaving 1)", len(ids))
+	}
+	r.cfg.Mode = jobcfg.ModeRestore
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	if err := os.RemoveAll(src); err != nil {
+		t.Fatal(err)
+	}
+	mkdir(t, src)
+	if err := r.restore(ctx, &jobcfg.Result{}); err != nil {
+		t.Fatalf("restore after guarded backup: %v", err)
+	}
+	for _, n := range []string{"a", "b", "c", "d"} {
+		if b, err := os.ReadFile(filepath.Join(src, n+".txt")); err != nil || string(b) != n {
+			t.Errorf("restored %s.txt = %q, %v", n, b, err)
+		}
+	}
+}
+
+// resticSnapshotIDs lists the snapshot ids currently in the repository's history.
+func resticSnapshotIDs(t *testing.T, r *runner, ctx context.Context) []string {
+	t.Helper()
+	out, err := r.resticRun(ctx, "", "snapshots", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snaps []struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.Unmarshal([]byte(out), &snaps); err != nil {
+		t.Fatalf("snapshots --json = %q: %v", out, err)
+	}
+	var ids []string
+	for _, s := range snaps {
+		ids = append(ids, s.Snapshot)
+	}
+	return ids
 }
 
 // files.exclude entries must stay out of the snapshot.
@@ -346,8 +386,56 @@ func TestResticRestorePaths(t *testing.T) {
 	}
 }
 
-// newVerifyRunner re-points a restic runner at the same store with a fresh scratch, as a verify pod has
-// (a fresh scratch also means a cold restic cache: no stale index can mask corruption).
+// A command source's payload lives under command/ in the snapshot (that is the staging layout the
+// runner commits), so a command restore must land the dumps under command/ on the target volume —
+// where the app's own import tool picks them up.
+func TestResticCommandRestoreRoundTrip(t *testing.T) {
+	r, _ := newResticRunner(t, snapshot.Retention{Hourly: 24})
+	r.cfg.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourceCommand, Command: &v1alpha1.CommandSource{
+		PodSelector: map[string]string{"app": "db"}, Command: []string{"true"}, File: "db.dump.gz",
+	}}
+	ctx := context.Background()
+
+	// Commit a staging-shaped tree: this is exactly what captureCommand leaves for the commit path.
+	staging := mkdir(t, t.TempDir(), "staging")
+	payload := "dump of everything\n"
+	mkdir(t, staging, "command")
+	f, err := os.Create(filepath.Join(staging, "command", "db.dump.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := gzip.NewWriter(f)
+	if _, err := zw.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.resticInit(ctx); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	if _, err := r.resticBackup(ctx, staging); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	mkdir(t, filepath.Join(r.source, "existing")) // pre-existing volume content must survive
+	r.cfg.Mode = jobcfg.ModeRestore
+	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
+	if err := r.restore(ctx, &jobcfg.Result{}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := gunzip(t, filepath.Join(r.source, "command", "db.dump.gz")); got != payload {
+		t.Errorf("restored dump = %q, want %q", got, payload)
+	}
+	if _, err := os.Stat(filepath.Join(r.source, "existing")); err != nil {
+		t.Errorf("pre-existing content removed: %v", err)
+	}
+}
+
+// newVerifyRunner re-points a restic runner at the same store with a fresh scratch, as a verify pod has// (a fresh scratch also means a cold restic cache: no stale index can mask corruption).
 func newVerifyRunner(t *testing.T, r *runner) *runner {
 	t.Helper()
 	v := newRunner(r.cfg)
@@ -384,12 +472,14 @@ func TestResticVerify(t *testing.T) {
 	// scratch, as a real verify pod has, means no stale index can mask it.
 	repo := r.resticRepo()
 	var packs []string
-	filepath.WalkDir(filepath.Join(repo, "data"), func(p string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(filepath.Join(repo, "data"), func(p string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			packs = append(packs, p)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("walking repo packs: %v", err)
+	}
 	if len(packs) == 0 {
 		t.Fatal("no pack files")
 	}
@@ -441,7 +531,7 @@ func gunzip(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatal(err)

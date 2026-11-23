@@ -88,7 +88,9 @@ func TestExecuteFailureWritesResult(t *testing.T) {
 	}
 	b, _ := os.ReadFile(os.Getenv(EnvTerminationLog))
 	var res jobcfg.Result
-	json.Unmarshal(b, &res)
+	if err := json.Unmarshal(b, &res); err != nil {
+		t.Fatalf("termination log %q: %v", b, err)
+	}
 	if res.OK || !strings.Contains(res.Message, "bogus") {
 		t.Errorf("result %+v", res)
 	}
@@ -117,12 +119,6 @@ func testRunner(t *testing.T, mode jobcfg.Mode, spec v1alpha1.BackupPolicySpec) 
 	tm := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	r.now = func() time.Time { tm = tm.Add(time.Hour); return tm }
 	return r
-}
-
-func (r *runner) as(mode jobcfg.Mode, rs *jobcfg.Restore) *runner {
-	c := *r
-	c.cfg.Mode, c.cfg.Restore = mode, rs
-	return &c
 }
 
 // Full round trip for a sqlite source on the restic engine: backup stages consistent copies under
@@ -182,7 +178,7 @@ func TestSQLiteBackupVerifyRestore(t *testing.T) {
 	write(t, db+"-wal", "stale")
 	write(t, db+"-shm", "stale")
 	write(t, other+"-journal", "stale")
-	os.Remove(other)
+	_ = os.Remove(other)
 
 	r.cfg.Mode = jobcfg.ModeRestore
 	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
@@ -354,7 +350,7 @@ func TestSQLiteCheckWorksOnReadOnlyWALCopy(t *testing.T) {
 	if err := os.Chmod(dir, 0o555); err != nil { // read-only directory, like the verify mount
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

@@ -44,7 +44,7 @@ func newRunner(cfg jobcfg.Config) *runner {
 }
 
 func (r *runner) logf(format string, a ...any) {
-	fmt.Fprintf(r.out, "%s "+format+"\n", append([]any{r.now().UTC().Format(time.RFC3339)}, a...)...)
+	_, _ = fmt.Fprintf(r.out, "%s "+format+"\n", append([]any{r.now().UTC().Format(time.RFC3339)}, a...)...)
 }
 
 // Run reads the job config from the environment, executes it and returns the process exit code.
