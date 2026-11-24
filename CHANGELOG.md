@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1alpha1` and may change between releases.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-23
 
 ### Added
 - **`command` source type**: a dump command is `exec`'d in a running app pod selected by label
@@ -94,6 +94,7 @@ First release.
   served over TLS to authenticated callers.
 - Helm chart (repository on GitHub Pages and OCI), CRD admission validation, a scripted end-to-end test.
 
-[Unreleased]: https://github.com/willuhmjs/backshots/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/willuhmjs/backshots/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.3.0
 [0.2.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.2.0
 [0.1.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.1.0
