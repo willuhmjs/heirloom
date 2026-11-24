@@ -1,4 +1,4 @@
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata:
   name: gitea-data-restore

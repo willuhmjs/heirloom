@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.23.0
-  name: backupstores.backshots.io
+  name: backupstores.heirloom.io
 spec:
-  group: backshots.io
+  group: heirloom.io
   names:
     kind: BackupStore
     listKind: BackupStoreList
@@ -21,7 +21,7 @@ spec:
     - jsonPath: .spec.nfs.path
       name: Path
       type: string
-    name: v1alpha1
+    name: v1
     schema:
       openAPIV3Schema:
         properties:

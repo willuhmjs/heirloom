@@ -15,7 +15,7 @@ func TestEmbeddedManifests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading embedded manifests: %v", err)
 	}
-	want := map[string]bool{"backuppolicies.backshots.io": false, "backupstores.backshots.io": false, "restores.backshots.io": false}
+	want := map[string]bool{"backuppolicies.heirloom.io": false, "backupstores.heirloom.io": false, "restores.heirloom.io": false}
 	if len(entries) != len(want) {
 		t.Fatalf("embedded %d manifests, want %d", len(entries), len(want))
 	}

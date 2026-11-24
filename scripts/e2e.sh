@@ -10,15 +10,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CLUSTER=${CLUSTER:-backshots-e2e}
-IMAGE=backshots:e2e
+CLUSTER=${CLUSTER:-heirloom-e2e}
+IMAGE=heirloom:e2e
 NFS=$CLUSTER-nfs
 NS=demo
 export PATH="$HOME/go/bin:$PATH"
 
 # A private kubeconfig: the test never reads or changes ~/.kube/config, and nothing that manages that file can
 # rename or remove the test cluster's context underneath it. Every tool below inherits it through KUBECONFIG.
-KUBECONFIG=$(mktemp -t backshots-e2e-kubeconfig.XXXXXX)
+KUBECONFIG=$(mktemp -t heirloom-e2e-kubeconfig.XXXXXX)
 export KUBECONFIG
 
 k() { kubectl "$@"; }
@@ -99,28 +99,28 @@ docker run -d --name "$NFS" --privileged --network kind -v "$NFS-data":/export "
 NFS_IP=$(docker inspect "$NFS" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
 wait_for "NFS server accepts a mount from the kind node" 40 \
   docker exec "$CLUSTER-control-plane" sh -c "mkdir -p /mnt/t && mount -t nfs4 -o proto=tcp $NFS_IP:/ /mnt/t && umount /mnt/t"
-helm install backshots charts/backshots -n backshots-system --create-namespace \
-  --set image.repository=backshots --set image.tag=e2e --set image.pullPolicy=IfNotPresent >/dev/null
-wait_for "operator is ready" 120 k -n backshots-system rollout status deploy/backshots --timeout=5s
+helm install heirloom charts/heirloom -n heirloom-system --create-namespace \
+  --set image.repository=heirloom --set image.tag=e2e --set image.pullPolicy=IfNotPresent >/dev/null
+wait_for "operator is ready" 120 k -n heirloom-system rollout status deploy/heirloom --timeout=5s
 
 step "Admission rejects bad specs"
-rejected "source type without its block" 'apiVersion: backshots.io/v1alpha1
+rejected "source type without its block" 'apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: bad, namespace: default}
 spec: {storeRef: nas, schedule: "@hourly", source: {type: files}}'
-rejected "two source blocks" 'apiVersion: backshots.io/v1alpha1
+rejected "two source blocks" 'apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: bad, namespace: default}
 spec: {storeRef: nas, schedule: "@hourly", source: {type: files, files: {pvc: a}, sqlite: {pvc: b, paths: [x.db]}}}'
-rejected "restore from: yesterday" 'apiVersion: backshots.io/v1alpha1
+rejected "restore from: yesterday" 'apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: bad, namespace: default}
 spec: {policyRef: x, from: yesterday}'
-rejected "all-zero retention" 'apiVersion: backshots.io/v1alpha1
+rejected "all-zero retention" 'apiVersion: heirloom.io/v1
 kind: BackupStore
 metadata: {name: bad}
 spec: {nfs: {server: 1.2.3.4, path: /x}, retention: {}}'
-rejected "relative NFS path" 'apiVersion: backshots.io/v1alpha1
+rejected "relative NFS path" 'apiVersion: heirloom.io/v1
 kind: BackupStore
 metadata: {name: bad}
 spec: {nfs: {server: 1.2.3.4, path: volume1/x}}'
@@ -128,7 +128,7 @@ spec: {nfs: {server: 1.2.3.4, path: volume1/x}}'
 step "Workloads and data"
 k create ns $NS >/dev/null
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupStore
 metadata: {name: nas}
 spec: {nfs: {server: $NFS_IP, path: /}, retention: {hourly: 3, daily: 2}}
@@ -211,7 +211,7 @@ web 'mkdir -p /data/docs/deep /data/media && cd /data && echo hello > docs/a.txt
   sqlite3 /db/app.db "pragma journal_mode=wal; create table t(id integer primary key, v text); insert into t(v) select value from generate_series(1,300);"' >/dev/null
 
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: files, namespace: $NS}
 spec:
@@ -220,7 +220,7 @@ spec:
   source: {type: files, files: {pvc: files-data}}
   trigger: {manual: "1"}
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: keeper, namespace: $NS}
 spec:
@@ -230,7 +230,7 @@ spec:
   retention: {weekly: 1}
   trigger: {manual: "1"}
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: sqlite, namespace: $NS}
 spec:
@@ -240,7 +240,7 @@ spec:
   verify: {schedule: "@daily"}
   trigger: {manual: "1"}
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: pg, namespace: $NS}
 spec:
@@ -255,7 +255,7 @@ spec:
   verify: {schedule: "@daily", database: app, sql: ["select count(*) = 500 from users"]}
   trigger: {manual: "1"}
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: pg-ambiguous, namespace: $NS}
 spec:
@@ -314,7 +314,7 @@ for v in 2 3; do
   k -n $NS patch bp keeper --type merge -p "{\"spec\":{\"trigger\":{\"manual\":\"$v\"}}}" >/dev/null
   if [[ $v == 2 ]]; then
     wait_for "the mover pod mounts only its policy's slice of the export, plus /scratch" 30 bash -c \
-      "mounts=\$(kubectl -n $NS get pods -l backshots.io/policy=keeper -o jsonpath='{.items[0].spec.containers[?(@.name==\"mover\")].volumeMounts}') &&
+      "mounts=\$(kubectl -n $NS get pods -l heirloom.io/policy=keeper -o jsonpath='{.items[0].spec.containers[?(@.name==\"mover\")].volumeMounts}') &&
        echo \"\$mounts\" | grep -q '\"mountPath\":\"/store\"' && echo \"\$mounts\" | grep -q '\"subPath\":\"$NS/keeper\"' &&
        echo \"\$mounts\" | grep -q '\"mountPath\":\"/scratch\"'"
   fi
@@ -340,7 +340,7 @@ step "Restore: postgres"
 pg -d app -qc "drop table users" >/dev/null
 pg -qc "drop database blog" >/dev/null
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: pg-restore, namespace: $NS}
 spec: {policyRef: pg, scaleDown: [{kind: Deployment, name: web}]}
@@ -356,12 +356,12 @@ check "a Succeeded event was recorded" bash -c "kubectl -n $NS get events --fiel
 step "Restore: files (one path) and sqlite"
 web 'rm -rf /data/docs; echo broken > /data/run.sh' >/dev/null
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: files-restore, namespace: $NS}
 spec: {policyRef: files, paths: [docs]}
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: sqlite-restore, namespace: $NS}
 spec: {policyRef: sqlite}
@@ -380,7 +380,7 @@ step "Restore: delete semantics, from a snapshot id"
 snap=$(k -n $NS get bp files -o jsonpath='{.status.lastSnapshot.name}')
 web 'echo extra > /data/extra.txt && rm -f /data/link-to-a' >/dev/null
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: files-delete, namespace: $NS}
 spec: {policyRef: files, from: $snap, delete: true, scaleDown: [{kind: Deployment, name: web}]}
@@ -397,7 +397,7 @@ equals "the 64 MiB file round-trips byte for byte" "$sha_big" web 'sha256sum /da
 
 step "Restore safety"
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: bad-combo, namespace: $NS}
 spec: {policyRef: files, paths: [docs], delete: true}
@@ -408,7 +408,7 @@ check "...and says why" bash -c \
   "kubectl -n $NS get restore bad-combo -o jsonpath='{.status.message}' | grep -q 'not both'"
 
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: bad-pvc, namespace: $NS}
 spec: {policyRef: files, targetPVC: nope, scaleDown: [{kind: Deployment, name: web}]}
@@ -417,14 +417,14 @@ wait_for "a restore into a missing PVC fails" 60 bash -c "[[ \$(kubectl -n $NS g
 equals "...and the workload was never stopped" "1" k -n $NS get deploy web -o jsonpath='{.spec.replicas}'
 
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: q1, namespace: $NS}
 spec: {policyRef: files, paths: [docs], scaleDown: [{kind: Deployment, name: web}]}
 EOF
 sleep 2
 k apply -f - >/dev/null <<EOF
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: q2, namespace: $NS}
 spec: {policyRef: files, paths: [docs]}
@@ -442,7 +442,7 @@ equals "scheduling resumes afterwards" "Scheduled" \
   k -n $NS get bp files -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}'
 
 step "Metrics are authenticated"
-POD_IP=$(k -n backshots-system get pod -l app.kubernetes.io/name=backshots -o jsonpath='{.items[0].status.podIP}')
+POD_IP=$(k -n heirloom-system get pod -l app.kubernetes.io/name=heirloom -o jsonpath='{.items[0].status.podIP}')
 node() { docker exec "$CLUSTER-control-plane" "$@"; }
 equals "anonymous request is refused (401)" "401" node curl -sk -o /dev/null -w '%{http_code}' "https://$POD_IP:8443/metrics"
 k create sa scraper -n $NS >/dev/null
@@ -451,10 +451,10 @@ equals "authenticated without the reader role is forbidden (403)" "403" \
   node curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://$POD_IP:8443/metrics"
 k create sa scraper2 -n $NS >/dev/null
 TOKEN2=$(k -n $NS create token scraper2)
-k create clusterrolebinding e2e-scraper2 --clusterrole=backshots-metrics-reader --serviceaccount=$NS:scraper2 >/dev/null
+k create clusterrolebinding e2e-scraper2 --clusterrole=heirloom-metrics-reader --serviceaccount=$NS:scraper2 >/dev/null
 equals "with the metrics-reader role it works (200)" "200" \
   node curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN2" "https://$POD_IP:8443/metrics"
-check "the health gauge is exported" bash -c "docker exec $CLUSTER-control-plane curl -sk -H 'Authorization: Bearer $TOKEN2' https://$POD_IP:8443/metrics | grep -q 'backshots_policy_healthy{namespace=\"$NS\",policy=\"pg\"} 1'"
+check "the health gauge is exported" bash -c "docker exec $CLUSTER-control-plane curl -sk -H 'Authorization: Bearer $TOKEN2' https://$POD_IP:8443/metrics | grep -q 'heirloom_policy_healthy{namespace=\"$NS\",policy=\"pg\"} 1'"
 
 step "Result"
 echo "  $pass passed, $fail failed"

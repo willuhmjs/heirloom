@@ -22,7 +22,7 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-      - run: helm lint charts/backshots
+      - run: helm lint charts/heirloom
   image:
     needs: verify
     runs-on: ubuntu-latest
@@ -80,11 +80,11 @@ jobs:
         run: |
           echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           VERSION="${GITHUB_REF_NAME#v}"
-          helm package charts/backshots --version "$VERSION" --app-version "$VERSION"
-          helm push "backshots-${VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts"
+          helm package charts/heirloom --version "$VERSION" --app-version "$VERSION"
+          helm push "heirloom-${VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts"
   helm-repo:
     # The Helm repository served at https://<owner>.github.io/<repo>:
-    #   helm repo add backshots https://willuhmjs.github.io/backshots
+    #   helm repo add heirloom https://willuhmjs.github.io/heirloom
     # chart-releaser attaches the packaged chart to a GitHub release and keeps index.yaml on the gh-pages branch.
     needs: image
     runs-on: ubuntu-latest
@@ -105,7 +105,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p .cr-release-packages
-          helm package charts/backshots --version "$VERSION" --app-version "$VERSION" --destination .cr-release-packages
+          helm package charts/heirloom --version "$VERSION" --app-version "$VERSION" --destination .cr-release-packages
       - uses: helm/chart-releaser-action@92c6b97fa9f664492a2592e0d1d80bc6bf378957 # v1.9.0
         with:
           charts_dir: charts

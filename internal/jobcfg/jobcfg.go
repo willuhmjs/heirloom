@@ -3,9 +3,9 @@
 //
 // Pod shape produced by the controller, for every mover Job (backup, verify, restore):
 //
-//	initContainer "install"  image=$BACKSHOTS_IMAGE  copies /backshots to the shared emptyDir /tools
+//	initContainer "install"  image=$HEIRLOOM_IMAGE  copies /heirloom to the shared emptyDir /tools
 //	container     "mover"    image=<runner image, or postgres.image for postgres sources>
-//	                         command: /tools/backshots run
+//	                         command: /tools/heirloom run
 //	                         env BS_CONFIG=<JSON of Config>, plus PGPASSWORD from the secretKeyRef (postgres)
 //	                         terminationMessagePath=/dev/termination-log, policy FallbackToLogsOnError
 //	volumes (mount paths inside "mover"):
@@ -23,8 +23,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 const (
@@ -34,12 +34,12 @@ const (
 	SourceMount  = "/source"
 	ScratchMount = "/scratch"
 	ToolsMount   = "/tools"
-	ToolsBinary  = "/tools/backshots"
+	ToolsBinary  = "/tools/heirloom"
 	// ImageBinary is where the runner image keeps the static binary.
-	ImageBinary = "/backshots"
+	ImageBinary = "/heirloom"
 
-	LabelPolicy = "backshots.io/policy"
-	LabelRole   = "backshots.io/role" // backup | verify | restore
+	LabelPolicy = "heirloom.io/policy"
+	LabelRole   = "heirloom.io/role" // backup | verify | restore
 
 	ContainerMover   = "mover"
 	ContainerInstall = "install"
@@ -68,7 +68,7 @@ type Config struct {
 	Namespace string `json:"namespace"`
 	Policy    string `json:"policy"`
 	// Spec is the full policy spec (source, minSourcePercent, verify, ...).
-	Spec v1alpha1.BackupPolicySpec `json:"spec"`
+	Spec v1.BackupPolicySpec `json:"spec"`
 	// Retention is already resolved (policy, else store, else default).
 	Retention snapshot.Retention `json:"retention"`
 	Restore   *Restore           `json:"restore,omitempty"`

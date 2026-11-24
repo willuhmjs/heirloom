@@ -1,11 +1,11 @@
 {{- if .Values.store.create }}
 
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupStore
 metadata:
   name: {{ .Values.store.name }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 spec:
   nfs:
     server: {{ required "store.nfs.server is required when store.create=true" .Values.store.nfs.server | quote }}

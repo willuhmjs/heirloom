@@ -1,4 +1,4 @@
-// Command backshots is the single binary of the operator: "manager" runs the controllers,
+// Command heirloom is the single binary of the operator: "manager" runs the controllers,
 // "run" is executed inside mover pods, and "install" copies the binary into a pod volume.
 package main
 
@@ -35,14 +35,14 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/yaml"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/controller"
-	"github.com/willuhmjs/backshots/internal/crds"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/runner"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/controller"
+	"github.com/willuhmjs/heirloom/internal/crds"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/runner"
 )
 
-const envImage = "BACKSHOTS_IMAGE"
+const envImage = "HEIRLOOM_IMAGE"
 
 func main() {
 	cmd, args := "manager", os.Args[1:]
@@ -73,7 +73,7 @@ func exitOnError(err error) {
 func newScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(v1alpha1.AddToScheme(scheme))
+	utilruntime.Must(v1.AddToScheme(scheme))
 	return scheme
 }
 
@@ -104,7 +104,7 @@ func runManager(args []string) error {
 		Metrics:                metricsOptions(*metricsAddr, *metricsSecure),
 		HealthProbeBindAddress: *probeAddr,
 		LeaderElection:         *leaderElect,
-		LeaderElectionID:       "backshots.backshots.io",
+		LeaderElectionID:       "heirloom.heirloom.io",
 		// Only objects created for policies are cached; workloads touched by restores are read directly.
 		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
 			&batchv1.Job{}: {Label: moverSelector},
@@ -114,10 +114,10 @@ func runManager(args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating manager: %w", err)
 	}
-	if err := (&controller.PolicyReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("backshots-policy")}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.PolicyReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("heirloom-policy")}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policy controller: %w", err)
 	}
-	restore := &controller.RestoreReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("backshots-restore")}
+	restore := &controller.RestoreReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("heirloom-restore")}
 	if err := restore.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up restore controller: %w", err)
 	}
@@ -142,7 +142,7 @@ func moverLabelSelector() (labels.Selector, error) {
 // (e.g. postgres) can execute it from a shared volume.
 func runInstall(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: backshots install <destination>")
+		return fmt.Errorf("usage: heirloom install <destination>")
 	}
 	self, err := os.Executable()
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
+	"github.com/willuhmjs/heirloom/api/v1"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 	fluxDisabled            = "disabled"
 	// annotationRestoredBy marks workloads on which a Restore (by name) added the Flux annotation,
 	// so only that annotation is removed again.
-	annotationRestoredBy = "backshots.io/restore"
+	annotationRestoredBy = "heirloom.io/restore"
 )
 
 // workload gives uniform access to the scaling fields of a Deployment or StatefulSet.
@@ -38,7 +38,7 @@ func (w workload) replicas() int32 {
 
 func (w workload) setReplicas(n int32) { *w.spec = &n }
 
-func getWorkload(ctx context.Context, c client.Reader, namespace string, ref v1alpha1.WorkloadRef) (workload, error) {
+func getWorkload(ctx context.Context, c client.Reader, namespace string, ref v1.WorkloadRef) (workload, error) {
 	key := client.ObjectKey{Namespace: namespace, Name: ref.Name}
 	switch ref.Kind {
 	case "Deployment":

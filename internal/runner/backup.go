@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // stagingDirName is the transient folder in the policy's store directory where sqlite copies and
@@ -90,10 +90,10 @@ func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
 // policy's subPath root) directly, or a freshly staged tree for sqlite and postgres payloads.
 func (r *runner) backupSource(ctx context.Context) (src, staging string, err error) {
 	switch r.cfg.Spec.Source.Type {
-	case v1alpha1.SourceFiles:
+	case v1.SourceFiles:
 		src, err = r.sourceRoot()
 		return src, "", err
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		if staging, err = r.beginStaging(); err != nil {
 			return "", "", err
 		}
@@ -102,7 +102,7 @@ func (r *runner) backupSource(ctx context.Context) (src, staging string, err err
 			return "", "", err
 		}
 		return staging, staging, nil
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		if staging, err = r.beginStaging(); err != nil {
 			return "", "", err
 		}
@@ -111,7 +111,7 @@ func (r *runner) backupSource(ctx context.Context) (src, staging string, err err
 			return "", "", err
 		}
 		return staging, staging, nil
-	case v1alpha1.SourceCommand:
+	case v1.SourceCommand:
 		if staging, err = r.beginStaging(); err != nil {
 			return "", "", err
 		}

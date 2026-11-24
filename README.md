@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="backshots: Kubernetes-native, deduplicated backups that land on your NAS" width="100%">
+  <img src="docs/assets/hero.svg" alt="heirloom: Kubernetes-native, deduplicated backups that land on your NAS" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/willuhmjs/backshots/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/willuhmjs/backshots/actions/workflows/ci.yaml/badge.svg"></a>
+  <a href="https://github.com/willuhmjs/heirloom/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/willuhmjs/heirloom/actions/workflows/ci.yaml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
-  <a href="https://github.com/willuhmjs/backshots/releases"><img alt="Release" src="https://img.shields.io/github/v/release/willuhmjs/backshots?include_prereleases&sort=semver"></a>
+  <a href="https://github.com/willuhmjs/heirloom/releases"><img alt="Release" src="https://img.shields.io/github/v/release/willuhmjs/heirloom?include_prereleases&sort=semver"></a>
   <img alt="Kubernetes 1.29+" src="https://img.shields.io/badge/kubernetes-1.29%2B-326ce5">
-  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
+  <img alt="Status: stable" src="https://img.shields.io/badge/status-stable-green">
 </p>
 
 <p align="center">
@@ -15,12 +15,12 @@
   <a href="docs/REFERENCE.md">Reference</a> ·
   <a href="docs/RESTORE-RUNBOOKS.md">Restore runbooks</a> ·
   <a href="docs/DESIGN.md">Design</a> ·
-  <a href="https://willuhmjs.github.io/backshots/">Website</a>
+  <a href="https://willuhmjs.github.io/heirloom/">Website</a>
 </p>
 
 ---
 
-**backshots** is a small Kubernetes operator that backs up your volumes and databases onto one NFS export as
+**heirloom** is a small Kubernetes operator that backs up your volumes and databases onto one NFS export as
 **restic repositories**. No backup server, no object store, nothing listening on a port — just a plain local restic
 repository per policy on your share. Because every run is **deduplicated**, a changed 10 GiB file costs its changed
 chunks (a few MiB), not a fresh 10 GiB copy; sqlite copies and postgres dumps dedup across runs too. History gets
@@ -43,7 +43,7 @@ on the worst day of the year. The NFS export's ACL remains the security boundary
   inside *your own* Postgres image, so the client always matches the server version. Anything else with a CLI dump
   tool (MySQL, MongoDB, Redis) fits the `command` source: it `exec`'s your command in the app's pod and keeps its
   output, with pre/post hooks to take and release a lock.
-- **A backup you have never restored is a guess.** Set a `verify` schedule and backshots restores the latest
+- **A backup you have never restored is a guess.** Set a `verify` schedule and heirloom restores the latest
   snapshot into a scratch database and runs your SQL assertions. The result is on the policy:
   `VERIFIED true`.
 - **Built for homelabs and small clusters.** One small controller, and the repository is a plain local restic repo
@@ -60,9 +60,9 @@ You need Kubernetes 1.29+, an NFS export your nodes can write to as root (`no_ro
 preserve ownership) and an NFS client on the nodes.
 
 ```sh
-helm repo add backshots https://willuhmjs.github.io/backshots
+helm repo add heirloom https://willuhmjs.github.io/heirloom
 helm repo update
-helm install backshots backshots/backshots -n backshots-system --create-namespace \
+helm install heirloom heirloom/heirloom -n heirloom-system --create-namespace \
   --set store.create=true \
   --set store.nfs.server=192.168.1.5 \
   --set store.nfs.path=/volume1/k8s-backup
@@ -71,7 +71,7 @@ helm install backshots backshots/backshots -n backshots-system --create-namespac
 Then put a `BackupPolicy` next to each thing you want protected:
 
 ```yaml
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: gitea-db, namespace: gitea}
 spec:
@@ -88,7 +88,7 @@ spec:
     database: gitea
     sql: ["select count(*) > 100 from repository"]
 ---
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata: {name: gitea-data, namespace: gitea}
 spec:
@@ -115,7 +115,7 @@ dump command `exec`'d in your app's pod — MySQL, MongoDB, Redis — with optio
 ## Restore
 
 ```yaml
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata: {name: gitea-db-oops, namespace: gitea}
 spec:
@@ -158,7 +158,7 @@ cluster rebuild are in [`docs/RESTORE-RUNBOOKS.md`](docs/RESTORE-RUNBOOKS.md).
 flowchart LR
   subgraph k8s[Kubernetes]
     direction LR
-    P[BackupPolicy<br/>one per app] --> C((backshots<br/>controller))
+    P[BackupPolicy<br/>one per app] --> C((heirloom<br/>controller))
     R[Restore] --> C
     C -- "one Job per due run" --> J["mover pod<br/>restic · pg_dump · sqlite3"]
     V[(PVC)] --> J
@@ -181,7 +181,7 @@ flowchart LR
 - Status flows back through the pod's termination message: `kubectl get bp` shows the last snapshot (restic's
   short hex id), the bytes it added, the next run, whether it verified, and a `Healthy` condition that also turns
   false when a backup is *overdue*, which is what an unreachable NAS looks like.
-- Kubernetes Events and Prometheus metrics (`backshots_policy_healthy`, last success, snapshot size, last verify)
+- Kubernetes Events and Prometheus metrics (`heirloom_policy_healthy`, last success, snapshot size, last verify)
   are there for alerting.
 - The runner image ships restic 0.18.1, built from the pinned tag with `CGO_ENABLED=0` so the same static
   binary also runs inside the postgres mover image, and the Dockerfile fails the build if
@@ -199,7 +199,7 @@ once you no longer need them. Backups are restic now, always — there is no tog
 
 ## Compared to other tools
 
-| | backshots | VolSync | k8up | Velero |
+| | heirloom | VolSync | k8up | Velero |
 |---|---|---|---|---|
 | Backup format | restic repository on NFS (local backend) | restic or rclone repository | restic repository | Kopia/restic repository |
 | Needs an object store or server | no, an NFS share | restic/S3 or similar | S3 or similar | yes, S3-compatible |
@@ -208,15 +208,16 @@ once you no longer need them. Backups are restic now, always — there is no tog
 | Built-in restore testing | yes (`verify`) | no | no | no |
 | Backs up Kubernetes objects | no, use GitOps | no | no | yes, its main job |
 | Encryption | none, by design | yes | yes | yes |
-| Maturity | **alpha** | mature | mature | very mature |
+| Maturity | **v1.0, but new** | mature | mature | very mature |
 
 Velero is the right answer when you must move whole clusters and namespaces around. VolSync and k8up are the right
-answer when you want encrypted, off-site repositories in object storage. backshots is for when you want
+answer when you want encrypted, off-site repositories in object storage. heirloom is for when you want
 deduplicated restic repositories on a box you own, with no service to run.
 
-## Status: alpha, and honest about it
+## Status: 1.0, and honest about it
 
-backshots is new. The API is `v1alpha1` and may change. What exists today:
+The API is `v1` and follows semver: fields are added in minor releases, never removed or redefined outside a
+major one. What exists today:
 
 - A scripted end-to-end test ([`scripts/e2e.sh`](scripts/e2e.sh)) that builds a kind cluster and a real NFS
   server, installs the chart and checks backups, retention, verify, restores, the restore safety nets and

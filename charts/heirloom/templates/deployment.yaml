@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "backshots.fullname" . }}
+  name: {{ include "heirloom.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicas }}
   strategy:
@@ -12,17 +12,17 @@ spec:
     type: {{ if gt (int .Values.replicas) 1 }}RollingUpdate{{ else }}Recreate{{ end }}
   selector:
     matchLabels:
-      {{- include "backshots.selectorLabels" . | nindent 6 }}
+      {{- include "heirloom.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "backshots.selectorLabels" . | nindent 8 }}
+        {{- include "heirloom.selectorLabels" . | nindent 8 }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "backshots.fullname" . }}
+      serviceAccountName: {{ include "heirloom.fullname" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: manager
-          image: {{ include "backshots.image" . }}
+          image: {{ include "heirloom.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - manager
@@ -46,8 +46,8 @@ spec:
             - --leader-elect
             {{- end }}
           env:
-            - name: BACKSHOTS_IMAGE
-              value: {{ include "backshots.image" . | quote }}
+            - name: HEIRLOOM_IMAGE
+              value: {{ include "heirloom.image" . | quote }}
           ports:
             - name: metrics
               containerPort: 8443

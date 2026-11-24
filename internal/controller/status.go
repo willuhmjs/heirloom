@@ -11,8 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 const (
@@ -27,7 +27,7 @@ func metaTime(t time.Time) *metav1.Time {
 
 // deriveStatus recomputes the run-derived parts of the policy status from observed Jobs and Pods.
 // Fields with no supporting Job (history pruned) keep their previous value.
-func deriveStatus(p *v1alpha1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Pod, now time.Time) {
+func deriveStatus(p *v1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Pod, now time.Time) {
 	st := &p.Status
 	backups := finishedRuns(jobs, pods, jobcfg.ModeBackup)
 	applySuccessfulBackup(st, backups) // must precede healthCondition: staleness reads status.lastSyncTime
@@ -38,7 +38,7 @@ func deriveStatus(p *v1alpha1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Po
 		st.LastVerify = nil
 	} else if verifies := finishedRuns(jobs, pods, jobcfg.ModeVerify); len(verifies) > 0 {
 		last := verifies[len(verifies)-1]
-		st.LastVerify = &v1alpha1.VerifyStatus{
+		st.LastVerify = &v1.VerifyStatus{
 			Time:     *metaTime(last.at),
 			OK:       last.ok,
 			Snapshot: last.result.Snapshot,
@@ -49,7 +49,7 @@ func deriveStatus(p *v1alpha1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Po
 }
 
 // applySuccessfulBackup copies the newest successful run into the status.
-func applySuccessfulBackup(st *v1alpha1.BackupPolicyStatus, backups []run) {
+func applySuccessfulBackup(st *v1.BackupPolicyStatus, backups []run) {
 	for i := len(backups) - 1; i >= 0; i-- {
 		if backups[i].ok {
 			applySuccess(st, backups[i])
@@ -61,7 +61,7 @@ func applySuccessfulBackup(st *v1alpha1.BackupPolicyStatus, backups []run) {
 // healthCondition is the single source of the Healthy condition: the outcome of the latest finished backup,
 // overridden by Stale when a run is overdue. It is computed once so the condition never flips back and forth
 // within one reconcile (which would change lastTransitionTime every time and re-trigger reconciles).
-func healthCondition(p *v1alpha1.BackupPolicy, backups []run, now time.Time) metav1.Condition {
+func healthCondition(p *v1.BackupPolicy, backups []run, now time.Time) metav1.Condition {
 	cond := metav1.Condition{Type: condHealthy, ObservedGeneration: p.Generation}
 	switch {
 	case len(backups) == 0:
@@ -104,7 +104,7 @@ const (
 // staleAt is the moment a policy becomes unhealthy if no backup succeeds: the first scheduled run after the
 // last success, plus a grace period of a quarter of the schedule interval (clamped to 5m..6h). This catches
 // failures that leave no finished Job, such as an unreachable NFS server holding the pod in ContainerCreating.
-func staleAt(p *v1alpha1.BackupPolicy) (time.Time, bool) {
+func staleAt(p *v1.BackupPolicy) (time.Time, bool) {
 	if p.Spec.Suspend {
 		return time.Time{}, false
 	}
@@ -123,13 +123,13 @@ func staleAt(p *v1alpha1.BackupPolicy) (time.Time, bool) {
 	return due.Add(grace), true
 }
 
-func applySuccess(st *v1alpha1.BackupPolicyStatus, r run) {
+func applySuccess(st *v1.BackupPolicyStatus, r run) {
 	res := r.result
 	snapTime := res.Time
 	if snapTime.IsZero() {
 		snapTime = r.at
 	}
-	st.LastSnapshot = &v1alpha1.SnapshotInfo{Name: res.Snapshot, Time: *metaTime(snapTime), Bytes: res.Bytes, Files: res.Files}
+	st.LastSnapshot = &v1.SnapshotInfo{Name: res.Snapshot, Time: *metaTime(snapTime), Bytes: res.Bytes, Files: res.Files}
 	st.LastSyncTime = metaTime(r.at)
 	st.LastSyncStartTime, st.LastSyncDuration = nil, nil
 	if s := r.job.Status.StartTime; s != nil {
@@ -142,7 +142,7 @@ func applySuccess(st *v1alpha1.BackupPolicyStatus, r run) {
 }
 
 // applyManual records the trigger value once its manual Job has succeeded.
-func applyManual(st *v1alpha1.BackupPolicyStatus, value string, generation int64, jobs []batchv1.Job) {
+func applyManual(st *v1.BackupPolicyStatus, value string, generation int64, jobs []batchv1.Job) {
 	if value == "" {
 		return
 	}
@@ -157,7 +157,7 @@ func applyManual(st *v1alpha1.BackupPolicyStatus, value string, generation int64
 	}
 }
 
-func nextSync(p *v1alpha1.BackupPolicy, now time.Time) *metav1.Time {
+func nextSync(p *v1.BackupPolicy, now time.Time) *metav1.Time {
 	if p.Spec.Suspend {
 		return nil
 	}
@@ -168,7 +168,7 @@ func nextSync(p *v1alpha1.BackupPolicy, now time.Time) *metav1.Time {
 	return metaTime(sched.Next(now).Add(jitterOffset(p, jobcfg.ModeBackup)))
 }
 
-func setReady(p *v1alpha1.BackupPolicy, ok bool, reason, message string) {
+func setReady(p *v1.BackupPolicy, ok bool, reason, message string) {
 	status := metav1.ConditionTrue
 	if !ok {
 		status = metav1.ConditionFalse
@@ -182,7 +182,7 @@ func setReady(p *v1alpha1.BackupPolicy, ok bool, reason, message string) {
 const maxPolicyNameLen = 40
 
 // validatePolicy checks the parts of a spec the CRD schema cannot express.
-func validatePolicy(p *v1alpha1.BackupPolicy) error {
+func validatePolicy(p *v1.BackupPolicy) error {
 	if len(p.Name) > maxPolicyNameLen {
 		return fmt.Errorf("policy name longer than %d characters", maxPolicyNameLen)
 	}

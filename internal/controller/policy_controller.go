@@ -19,8 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // PolicyReconciler schedules the backup and verify runs of a BackupPolicy itself: it creates a Job when a
@@ -30,7 +30,7 @@ type PolicyReconciler struct {
 	// Reader reads RBAC objects uncached (they are not in the label-filtered cache).
 	Reader client.Reader
 	Scheme *runtime.Scheme
-	// Image is the runner image (BACKSHOTS_IMAGE).
+	// Image is the runner image (HEIRLOOM_IMAGE).
 	Image string
 	// Now is overridable for tests.
 	Now func() time.Time
@@ -41,11 +41,11 @@ type PolicyReconciler struct {
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("backuppolicy").
-		For(&v1alpha1.BackupPolicy{}).
+		For(&v1.BackupPolicy{}).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(policyOfMover)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(policyOfMover)).
-		Watches(&v1alpha1.BackupStore{}, handler.EnqueueRequestsFromMapFunc(r.policiesOfStore)).
-		Watches(&v1alpha1.Restore{}, handler.EnqueueRequestsFromMapFunc(policyOfRestore)).
+		Watches(&v1.BackupStore{}, handler.EnqueueRequestsFromMapFunc(r.policiesOfStore)).
+		Watches(&v1.Restore{}, handler.EnqueueRequestsFromMapFunc(policyOfRestore)).
 		Complete(r)
 }
 
@@ -60,7 +60,7 @@ func policyOfMover(_ context.Context, obj client.Object) []reconcile.Request {
 
 // policyOfRestore maps a Restore to the policy it restores, which pauses scheduling while the Restore runs.
 func policyOfRestore(_ context.Context, obj client.Object) []reconcile.Request {
-	rs, ok := obj.(*v1alpha1.Restore)
+	rs, ok := obj.(*v1.Restore)
 	if !ok || rs.Spec.PolicyRef == "" {
 		return nil
 	}
@@ -68,7 +68,7 @@ func policyOfRestore(_ context.Context, obj client.Object) []reconcile.Request {
 }
 
 func (r *PolicyReconciler) policiesOfStore(ctx context.Context, obj client.Object) []reconcile.Request {
-	var list v1alpha1.BackupPolicyList
+	var list v1.BackupPolicyList
 	if err := r.List(ctx, &list); err != nil {
 		return nil
 	}
@@ -82,7 +82,7 @@ func (r *PolicyReconciler) policiesOfStore(ctx context.Context, obj client.Objec
 }
 
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var p v1alpha1.BackupPolicy
+	var p v1.BackupPolicy
 	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
 		if apierrors.IsNotFound(err) {
 			forgetMetrics(req.Namespace, req.Name)
@@ -116,12 +116,12 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // reconcile starts due runs, then brings the in-memory status up to date; the caller persists the status.
-func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1alpha1.BackupPolicy) error {
+func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1.BackupPolicy) error {
 	if err := validatePolicy(p); err != nil {
 		setReady(p, false, "InvalidSpec", err.Error())
 		return nil
 	}
-	var store v1alpha1.BackupStore
+	var store v1.BackupStore
 	if err := r.Get(ctx, types.NamespacedName{Name: p.Spec.StoreRef}, &store); err != nil {
 		if apierrors.IsNotFound(err) {
 			setReady(p, false, "StoreNotFound", fmt.Sprintf("BackupStore %q not found", p.Spec.StoreRef))
@@ -150,7 +150,7 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1alpha1.BackupPoli
 	case restoring != "":
 		setReady(p, true, "RestoreInProgress", fmt.Sprintf("paused while restore %q runs", restoring))
 	default:
-		if p.Spec.Source.Type == v1alpha1.SourceCommand {
+		if p.Spec.Source.Type == v1.SourceCommand {
 			if err := r.ensureExecutorRBAC(ctx, p); err != nil {
 				return err
 			}
@@ -167,7 +167,7 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1alpha1.BackupPoli
 	return r.pruneHistory(ctx, jobs)
 }
 
-func (r *PolicyReconciler) observe(ctx context.Context, p *v1alpha1.BackupPolicy) ([]batchv1.Job, []corev1.Pod, error) {
+func (r *PolicyReconciler) observe(ctx context.Context, p *v1.BackupPolicy) ([]batchv1.Job, []corev1.Pod, error) {
 	scope := []client.ListOption{client.InNamespace(p.Namespace), client.MatchingLabels{jobcfg.LabelPolicy: p.Name}}
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, scope...); err != nil {

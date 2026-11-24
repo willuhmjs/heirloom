@@ -16,14 +16,14 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // commandPolicy is a files policy whose source execs a dump command in the web pod.
-func commandPolicy() *v1alpha1.BackupPolicy {
+func commandPolicy() *v1.BackupPolicy {
 	p := filesPolicy()
-	p.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourceCommand, Command: &v1alpha1.CommandSource{
+	p.Spec.Source = v1.Source{Type: v1.SourceCommand, Command: &v1.CommandSource{
 		PodSelector: map[string]string{"app": "web"},
 		Command:     []string{"sh", "-c", "mysqldump --all-databases"},
 		File:        "all-databases.sql.gz",
@@ -122,7 +122,7 @@ func TestRestoreWaitsForActiveMover(t *testing.T) {
 		Status:     batchv1.JobStatus{StartTime: &metav1.Time{Time: testNow.Add(-time.Minute)}, Active: 1},
 	}
 	c := newFake(t, testStore(), filesPolicy(), testDeployment(nil),
-		testRestore(func(r *v1alpha1.Restore) { r.Spec.ScaleDown = nil }), active)
+		testRestore(func(r *v1.Restore) { r.Spec.ScaleDown = nil }), active)
 	r := newRestoreReconciler(c)
 
 	reconcileKey(t, r, "apps", "r1") // "" -> Pending
@@ -248,7 +248,7 @@ func TestQuiesceHPAsLeavesOtherTargetsAlone(t *testing.T) {
 // --- command source: validation, RBAC, pod identity --------------------------------
 
 func TestRestoreOfCommandSourceNeedsTargetPVC(t *testing.T) {
-	c := newFake(t, testStore(), commandPolicy(), testRestore(func(r *v1alpha1.Restore) {
+	c := newFake(t, testStore(), commandPolicy(), testRestore(func(r *v1.Restore) {
 		r.Spec.ScaleDown = nil
 		r.Spec.Paths = nil
 	}))
@@ -265,7 +265,7 @@ func TestRestoreOfCommandSourceNeedsTargetPVC(t *testing.T) {
 }
 
 func TestRestoreOfCommandSourceWritesToTargetPVC(t *testing.T) {
-	c := newFake(t, testStore(), commandPolicy(), testRestore(func(r *v1alpha1.Restore) {
+	c := newFake(t, testStore(), commandPolicy(), testRestore(func(r *v1.Restore) {
 		r.Spec.ScaleDown = nil
 		r.Spec.Paths = nil
 		r.Spec.TargetPVC = "app-data"
@@ -353,7 +353,7 @@ func TestNonCommandPoliciesGetNoExecutorRBAC(t *testing.T) {
 
 // --- store mountOptions: static PV/PVC provisioning --------------------------------
 
-func nfsStore() *v1alpha1.BackupStore {
+func nfsStore() *v1.BackupStore {
 	s := testStore()
 	s.Spec.NFS.MountOptions = []string{"nfsvers=4.1", "hard", "timeo=50"}
 	return s
@@ -429,7 +429,7 @@ func TestStoreClaimMountOptionsDriftIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcileKey(t, r, "apps", "app")
-	var p v1alpha1.BackupPolicy
+	var p v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &p)
 	cond := meta.FindStatusCondition(p.Status.Conditions, "Ready")
 	if cond == nil || cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, "kubectl delete pv") {

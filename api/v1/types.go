@@ -1,4 +1,4 @@
-package v1alpha1
+package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -126,7 +126,7 @@ type PostgresSource struct {
 }
 
 // CommandSource runs a command in a running pod and stores its stdout in the snapshot. This is how
-// databases backshots does not speak natively get consistent dumps: mysqldump, mongodump,
+// databases heirloom does not speak natively get consistent dumps: mysqldump, mongodump,
 // redis-cli --rdb - ... the command runs inside its own container, with its own tools, client version
 // and authentication. The dump lands in the snapshot as command/<file>; a restore writes it to a PVC
 // (restore.targetPVC) for the app's own import tool to load.

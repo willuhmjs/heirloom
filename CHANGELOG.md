@@ -1,9 +1,26 @@
 # Changelog
 
 All notable changes to this project are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1alpha1` and may change between releases.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
+API changes only come with a new major version.
 
-## [0.3.0] - 2026-11-23
+## [1.0.0] - 2026-11-24
+
+### Changed
+- **Renamed: backshots is now heirloom.** The API group is `heirloom.io`, the Go module is
+  `github.com/willuhmjs/heirloom`, the image is `ghcr.io/willuhmjs/heirloom`, the chart is published to
+  `oci://ghcr.io/willuhmjs/charts/heirloom` and the Helm repository moved to
+  `https://willuhmjs.github.io/heirloom`. Nothing about how backups work changed, and the repositories on your
+  store are untouched — point policies at the same paths and the same restic repos keep deduplicating.
+  Migrating the Kubernetes objects is a manual swap, documented in
+  [`docs/UPGRADING.md`](docs/UPGRADING.md#upgrading-from-backshots-0x).
+- **The API graduates from `v1alpha1` to `v1`** with no schema changes: the same fields, served and stored as
+  `heirloom.io/v1`. Policies and stores only need their `apiVersion` line changed.
+
+_Releases before 1.0.0 were published under the project's former name; their tags and GitHub releases were
+not carried over. The code history is complete._
+
+## 0.3.0 - 2026-11-23
 
 ### Added
 - **`command` source type**: a dump command is `exec`'d in a running app pod selected by label
@@ -11,7 +28,7 @@ All notable changes to this project are documented here. The format follows
   snapshot — the same staging contract SQLite and Postgres follow, so retention and verify paths are
   shared. Optional `preCommand`/`postCommand` quiesce hooks: the pre-command must exit 0 before the dump
   starts, the post-command runs no matter how the dump ended, so a lock is never left held. The mover runs
-  as a scoped, controller-maintained `backshots-executor` ServiceAccount whose Role grants nothing but
+  as a scoped, controller-maintained `heirloom-executor` ServiceAccount whose Role grants nothing but
   pod lookup and `pods/exec`. A `Restore` of a command source requires `targetPVC`: the dumps are restored
   onto that volume and the app's own import tool loads them.
 - **Scheduling jitter** (`spec.jitter`): every cron slot of a policy shifts by a fixed, per-policy hash
@@ -29,7 +46,7 @@ All notable changes to this project are documented here. The format follows
   as before.
 - Chart: optional `replicas` (leader election is now on by default, and >1 enables a rolling update), an
   optional `PodDisruptionBudget`, and **CRD hooks**: a pre-install/pre-upgrade hook Job running the
-  operator's own image applies the CRDs embedded in it (`backshots install-crds`), closing Helm's
+  operator's own image applies the CRDs embedded in it (`heirloom install-crds`), closing Helm's
   "crds/ are installed once, never upgraded" gap. `crdHooks.enabled=false` opts out.
 
 ### Changed
@@ -50,7 +67,7 @@ All notable changes to this project are documented here. The format follows
   and a new e2e workflow runs the full install against a kind cluster with an NFS server on every pull
   request.
 
-## [0.2.0] - 2026-11-23
+## 0.2.0 - 2026-11-23
 
 ### Changed
 - **Breaking:** backups are now restic repositories at `<namespace>/<policy>/restic` on the store, replacing the
@@ -74,12 +91,12 @@ All notable changes to this project are documented here. The format follows
     deleted; `delete` together with `paths` is rejected, a restic limitation.
   - Manual triggers, schedules, suspend and the restore drain/quiesce behaviour are unchanged.
 
-## [0.1.0]
+## 0.1.0
 
 First release.
 
 ### Added
-- `BackupStore`, `BackupPolicy` and `Restore` custom resources (`backshots.io/v1alpha1`).
+- `BackupStore`, `BackupPolicy` and `Restore` custom resources (`heirloom.io/v1`).
 - Sources: files (rsync, preserving ownership, ACLs, xattrs, symlinks), SQLite (online backup plus integrity
   check) and PostgreSQL (`pg_dump` per database plus roles, run in the user's own Postgres image).
 - Plain-file, hardlinked snapshots on NFS, published atomically, with hourly/daily/weekly/monthly retention.
@@ -94,7 +111,5 @@ First release.
   served over TLS to authenticated callers.
 - Helm chart (repository on GitHub Pages and OCI), CRD admission validation, a scripted end-to-end test.
 
-[Unreleased]: https://github.com/willuhmjs/backshots/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.3.0
-[0.2.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.2.0
-[0.1.0]: https://github.com/willuhmjs/backshots/releases/tag/v0.1.0
+[Unreleased]: https://github.com/willuhmjs/heirloom/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/willuhmjs/heirloom/releases/tag/v1.0.0

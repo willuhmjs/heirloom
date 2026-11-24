@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.23.0
-  name: restores.backshots.io
+  name: restores.heirloom.io
 spec:
-  group: backshots.io
+  group: heirloom.io
   names:
     kind: Restore
     listKind: RestoreList
@@ -29,7 +29,7 @@ spec:
     - jsonPath: .status.message
       name: Message
       type: string
-    name: v1alpha1
+    name: v1
     schema:
       openAPIV3Schema:
         properties:

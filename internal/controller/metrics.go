@@ -6,36 +6,36 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
+	"github.com/willuhmjs/heirloom/api/v1"
 )
 
 var (
 	labels = []string{"namespace", "policy"}
 
 	lastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_last_success_timestamp_seconds",
+		Name: "heirloom_last_success_timestamp_seconds",
 		Help: "Unix time of the last successful backup.",
 	}, labels)
 	lastSnapshotBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_last_snapshot_bytes",
+		Name: "heirloom_last_snapshot_bytes",
 		Help: "Size in bytes of the last snapshot.",
 	}, labels)
 	lastVerifyOK = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_last_verify_ok",
+		Name: "heirloom_last_verify_ok",
 		Help: "1 if the last verify run succeeded, 0 if it failed.",
 	}, labels)
 	snapshotsKept = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_snapshots_kept",
+		Name: "heirloom_snapshots_kept",
 		Help: "Snapshots retained after the last backup.",
 	}, labels)
 
 	policyHealthy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_policy_healthy",
+		Name: "heirloom_policy_healthy",
 		Help: "1 if the policy's Healthy condition is True, 0 if False (failed or stale). Absent while Unknown. " +
 			"Unlike last_success_timestamp it exists for a policy that never succeeded.",
 	}, labels)
 	policyCreated = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "backshots_policy_created_timestamp_seconds",
+		Name: "heirloom_policy_created_timestamp_seconds",
 		Help: "Unix time the policy was created.",
 	}, labels)
 
@@ -49,7 +49,7 @@ func init() {
 }
 
 // recordMetrics mirrors the policy status into gauges; series without data are removed.
-func recordMetrics(p *v1alpha1.BackupPolicy) {
+func recordMetrics(p *v1.BackupPolicy) {
 	st := p.Status
 	set := func(g *prometheus.GaugeVec, v float64, ok bool) {
 		if ok {

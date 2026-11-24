@@ -1,8 +1,8 @@
 # Dump any database from inside its own pod. The mover execs the command over the API using the
-# scoped backshots-executor identity the controller maintains in this namespace (pods get/list and
+# scoped heirloom-executor identity the controller maintains in this namespace (pods get/list and
 # pods/exec create, nothing else), and gzip's its stdout into command/all-databases.sql.gz.
 # podSelector must match exactly one Running, ready pod.
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupPolicy
 metadata:
   name: mysql
@@ -23,7 +23,7 @@ spec:
 ---
 # Restoring has no universal loader: the dumps are written onto targetPVC under command/, and the
 # app's own import tool takes them from there.
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: Restore
 metadata:
   name: mysql-restore

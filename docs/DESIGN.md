@@ -35,7 +35,7 @@ through the pod termination message (`/dev/termination-log`), a small JSON docum
 stage their payload through it, and verify runs a throwaway postgres server on it.
 `pod.scratchStorageClassName` sizes it from a storage class; the default emptyDir consumes node disk.
 
-**The runner binary is injected by an init container.** An init container copies `/backshots` to an
+**The runner binary is injected by an init container.** An init container copies `/heirloom` to an
 emptyDir, so postgres pods run in the user's own `postgres:N` image and `pg_dump` always matches the
 server major version. The same binary is manager, installer and runner.
 

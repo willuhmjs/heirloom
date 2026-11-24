@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // EnvTerminationLog overrides jobcfg.TerminationLog (used by tests).
@@ -51,7 +51,7 @@ func (r *runner) logf(format string, a ...any) {
 func Run(ctx context.Context) int {
 	cfg, err := jobcfg.FromEnv()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backshots run:", err)
+		fmt.Fprintln(os.Stderr, "heirloom run:", err)
 		writeResult(termLogPath(), jobcfg.Result{Mode: cfg.Mode, Message: err.Error(), Time: time.Now()})
 		return 2
 	}
@@ -106,7 +106,7 @@ func writeResult(path string, res jobcfg.Result) {
 		err = os.WriteFile(path, b, 0o644)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "backshots: writing termination log:", err)
+		fmt.Fprintln(os.Stderr, "heirloom: writing termination log:", err)
 	}
 }
 

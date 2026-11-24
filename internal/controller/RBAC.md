@@ -4,21 +4,21 @@ Cluster-scoped (ClusterRole):
 
 | apiGroup | resources | verbs |
 |---|---|---|
-| backshots.io | backupstores | get, list, watch |
-| backshots.io | backuppolicies, restores | get, list, watch |
-| backshots.io | backuppolicies/status, restores/status | get, update |
-| backshots.io | restores | update (the `backshots.io/restore` finalizer) |
-| backshots.io | backuppolicies/finalizers, restores/finalizers | update (blockOwnerDeletion on owned Jobs) |
+| heirloom.io | backupstores | get, list, watch |
+| heirloom.io | backuppolicies, restores | get, list, watch |
+| heirloom.io | backuppolicies/status, restores/status | get, update |
+| heirloom.io | restores | update (the `heirloom.io/restore` finalizer) |
+| heirloom.io | backuppolicies/finalizers, restores/finalizers | update (blockOwnerDeletion on owned Jobs) |
 | (core) | persistentvolumeclaims | get (uncached: a restore checks its claim exists before stopping anything) |
 | apps | deployments, statefulsets | get, patch |
 | (core) | pods | get, list, watch |
 | (core) | events | create, patch (health changes and restore phases) |
 
-Pods: cached list/watch of mover pods (label `backshots.io/policy`), and uncached `list` of the pods of
+Pods: cached list/watch of mover pods (label `heirloom.io/policy`), and uncached `list` of the pods of
 workloads being scaled down by a Restore (any pod in the Restore's namespace).
 
 Workloads are read uncached with `get` and changed with a merge `patch` (replicas and annotations
-`kustomize.toolkit.fluxcd.io/reconcile`, `backshots.io/restore`). No watch/list on Deployments or StatefulSets.
+`kustomize.toolkit.fluxcd.io/reconcile`, `heirloom.io/restore`). No watch/list on Deployments or StatefulSets.
 
 In every namespace that holds BackupPolicies/Restores (Role or the ClusterRole above bound cluster-wide):
 

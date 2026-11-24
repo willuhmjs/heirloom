@@ -9,9 +9,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 
 	// ExecutorServiceAccount is the namespace-local identity created for policies whose source execs
 	// into app pods (command sources). Its Role grants nothing but pod lookup and pods/exec.
-	ExecutorServiceAccount = "backshots-executor"
+	ExecutorServiceAccount = "heirloom-executor"
 )
 
 // moverPod holds everything needed to render the pod of one backup, verify or restore run,
@@ -34,8 +34,8 @@ type moverPod struct {
 	mode        jobcfg.Mode
 	namespace   string
 	policy      string
-	spec        v1alpha1.BackupPolicySpec
-	store       *v1alpha1.BackupStore
+	spec        v1.BackupPolicySpec
+	store       *v1.BackupStore
 	runnerImage string
 	restore     *jobcfg.Restore
 	// sourcePVC overrides the policy's PVC (restore into another claim).
@@ -53,11 +53,11 @@ type moverPod struct {
 func (m moverPod) needsScratch() bool { return true }
 
 func (m moverPod) readOnlySource() bool {
-	return m.spec.Source.Type == v1alpha1.SourceFiles && m.mode != jobcfg.ModeRestore
+	return m.spec.Source.Type == v1.SourceFiles && m.mode != jobcfg.ModeRestore
 }
 
 func (m moverPod) moverImage() string {
-	if m.spec.Source.Type == v1alpha1.SourcePostgres {
+	if m.spec.Source.Type == v1.SourcePostgres {
 		return m.spec.Source.Postgres.Image
 	}
 	return m.runnerImage
@@ -68,9 +68,9 @@ func (m moverPod) claim() string {
 		return m.sourcePVC
 	}
 	switch m.spec.Source.Type {
-	case v1alpha1.SourceFiles:
+	case v1.SourceFiles:
 		return m.spec.Source.Files.PVC
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		return m.spec.Source.SQLite.PVC
 	}
 	return ""
@@ -80,7 +80,7 @@ func (m moverPod) claim() string {
 // them exec into app pods (command sources; restore of a command source writes to a PVC and does not
 // exec).
 func (m moverPod) needsExecutorRBAC() bool {
-	return m.spec.Source.Type == v1alpha1.SourceCommand && m.mode == jobcfg.ModeBackup
+	return m.spec.Source.Type == v1.SourceCommand && m.mode == jobcfg.ModeBackup
 }
 
 func (m moverPod) podSpec() (corev1.PodSpec, error) {
@@ -103,7 +103,7 @@ func (m moverPod) podSpec() (corev1.PodSpec, error) {
 		RestartPolicy: corev1.RestartPolicyNever,
 		// Movers never talk to the Kubernetes API; do not hand them a token. The one exception is the
 		// command source: its mover execs into the app pod through the API using the scoped
-		// backshots-executor identity the controller maintains for the policy.
+		// heirloom-executor identity the controller maintains for the policy.
 		AutomountServiceAccountToken: ptr.To(m.needsExecutorRBAC()),
 		ImagePullSecrets:             m.spec.Pod.ImagePullSecrets,
 		InitContainers:               []corev1.Container{m.installContainer()},
@@ -274,8 +274,8 @@ func jobLabels(policy string, role jobcfg.Mode) map[string]string {
 }
 
 // resolveRetention picks the policy's retention, else the store's, else the built-in default.
-func resolveRetention(policy *v1alpha1.Retention, store *v1alpha1.BackupStore) snapshot.Retention {
-	for _, r := range []*v1alpha1.Retention{policy, store.Spec.Retention} {
+func resolveRetention(policy *v1.Retention, store *v1.BackupStore) snapshot.Retention {
+	for _, r := range []*v1.Retention{policy, store.Spec.Retention} {
 		if r == nil {
 			continue
 		}
@@ -288,12 +288,12 @@ func resolveRetention(policy *v1alpha1.Retention, store *v1alpha1.BackupStore) s
 }
 
 // validateSource checks that the sub-struct selected by Type is the only one set and is complete.
-func validateSource(s v1alpha1.Source) error {
-	set := map[v1alpha1.SourceType]bool{
-		v1alpha1.SourceFiles:    s.Files != nil,
-		v1alpha1.SourceSQLite:   s.SQLite != nil,
-		v1alpha1.SourcePostgres: s.Postgres != nil,
-		v1alpha1.SourceCommand:  s.Command != nil,
+func validateSource(s v1.Source) error {
+	set := map[v1.SourceType]bool{
+		v1.SourceFiles:    s.Files != nil,
+		v1.SourceSQLite:   s.SQLite != nil,
+		v1.SourcePostgres: s.Postgres != nil,
+		v1.SourceCommand:  s.Command != nil,
 	}
 	known, selected := set[s.Type]
 	if !known {
@@ -308,19 +308,19 @@ func validateSource(s v1alpha1.Source) error {
 		}
 	}
 	switch s.Type {
-	case v1alpha1.SourceFiles:
+	case v1.SourceFiles:
 		if s.Files.PVC == "" {
 			return fmt.Errorf("source.files.pvc is required")
 		}
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		if s.SQLite.PVC == "" || len(s.SQLite.Paths) == 0 {
 			return fmt.Errorf("source.sqlite.pvc and source.sqlite.paths are required")
 		}
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		if s.Postgres.Image == "" || s.Postgres.Host == "" {
 			return fmt.Errorf("source.postgres.image and source.postgres.host are required")
 		}
-	case v1alpha1.SourceCommand:
+	case v1.SourceCommand:
 		if s.Command.File == "" || len(s.Command.Command) == 0 || len(s.Command.PodSelector) == 0 {
 			return fmt.Errorf("source.command.podSelector, source.command.command and source.command.file are required")
 		}

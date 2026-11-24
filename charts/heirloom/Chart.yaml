@@ -1,14 +1,14 @@
 apiVersion: v2
-name: backshots
+name: heirloom
 description: Kubernetes-native backups that land as deduplicated restic repositories on your NAS. App-consistent Postgres and SQLite dumps, GFS retention with prune, restores that are tested.
 type: application
-version: 0.3.0
-appVersion: 0.3.0
+version: 1.0.0
+appVersion: 1.0.0
 kubeVersion: ">=1.29.0-0"
-home: https://willuhmjs.github.io/backshots/
-icon: https://raw.githubusercontent.com/willuhmjs/backshots/main/docs/assets/logo.svg
+home: https://willuhmjs.github.io/heirloom/
+icon: https://raw.githubusercontent.com/willuhmjs/heirloom/main/docs/assets/logo.svg
 sources:
-  - https://github.com/willuhmjs/backshots
+  - https://github.com/willuhmjs/heirloom
 keywords:
   - backup
   - restore
@@ -27,22 +27,22 @@ annotations:
   artifacthub.io/containsSecurityUpdates: "false"
   artifacthub.io/crds: |
     - kind: BackupStore
-      version: v1alpha1
-      name: backupstores.backshots.io
+      version: v1
+      name: backupstores.heirloom.io
       displayName: Backup store
       description: The NFS export that receives the backups.
     - kind: BackupPolicy
-      version: v1alpha1
-      name: backuppolicies.backshots.io
+      version: v1
+      name: backuppolicies.heirloom.io
       displayName: Backup policy
       description: What to back up (files, SQLite, Postgres), when, and how long to keep it.
     - kind: Restore
-      version: v1alpha1
-      name: restores.backshots.io
+      version: v1
+      name: restores.heirloom.io
       displayName: Restore
       description: Restore a policy's data from a snapshot.
   artifacthub.io/crdsExamples: |
-    - apiVersion: backshots.io/v1alpha1
+    - apiVersion: heirloom.io/v1
       kind: BackupPolicy
       metadata:
         name: gitea-db
@@ -57,10 +57,10 @@ annotations:
             host: postgres.gitea.svc
             passwordSecretRef: {name: postgres, key: password}
   artifacthub.io/images: |
-    - name: backshots
-      image: ghcr.io/willuhmjs/backshots:0.1.0
+    - name: heirloom
+      image: ghcr.io/willuhmjs/heirloom:0.1.0
   artifacthub.io/links: |
     - name: Documentation
-      url: https://github.com/willuhmjs/backshots/blob/main/docs/REFERENCE.md
+      url: https://github.com/willuhmjs/heirloom/blob/main/docs/REFERENCE.md
     - name: Restore runbooks
-      url: https://github.com/willuhmjs/backshots/blob/main/docs/RESTORE-RUNBOOKS.md
+      url: https://github.com/willuhmjs/heirloom/blob/main/docs/RESTORE-RUNBOOKS.md

@@ -12,8 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // historyLimit is how many finished Jobs of each outcome (succeeded, failed) the controller keeps per role.
@@ -36,7 +36,7 @@ const maxJitter = 6 * time.Hour
 // namespace/name/role scaled into [0, jitter). The offset is the same every reconcile, so slots stay
 // predictable and the slot-derived Job names stay idempotent. Unset or unparsable jitter is 0
 // (validatePolicy surfaces unparsable values on the policy instead).
-func jitterOffset(p *v1alpha1.BackupPolicy, role jobcfg.Mode) time.Duration {
+func jitterOffset(p *v1.BackupPolicy, role jobcfg.Mode) time.Duration {
 	if p.Spec.Jitter == "" {
 		return 0
 	}
@@ -82,8 +82,8 @@ func hasActive(jobs []batchv1.Job, role jobcfg.Mode) bool {
 
 // restoreActive reports whether a Restore for the policy has not finished. While one is, the policy starts no
 // backup or verify: a backup would snapshot a half-restored volume and become the newest snapshot.
-func (r *PolicyReconciler) restoreActive(ctx context.Context, p *v1alpha1.BackupPolicy) (string, error) {
-	var list v1alpha1.RestoreList
+func (r *PolicyReconciler) restoreActive(ctx context.Context, p *v1.BackupPolicy) (string, error) {
+	var list v1.RestoreList
 	if err := r.List(ctx, &list, client.InNamespace(p.Namespace)); err != nil {
 		return "", err
 	}
@@ -105,7 +105,7 @@ func (r *PolicyReconciler) restoreActive(ctx context.Context, p *v1alpha1.Backup
 // never starts a second Job of a role while one is active (what CronJob's concurrencyPolicy: Forbid did),
 // and the two roles exclude each other outright: forget+prune takes an exclusive lock and rewrites pack
 // files, which is exactly what a verify reading the same repository must not race.
-func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, jobs []batchv1.Job, now time.Time) error {
+func (r *PolicyReconciler) startDue(ctx context.Context, p *v1.BackupPolicy, store *v1.BackupStore, jobs []batchv1.Job, now time.Time) error {
 	created := p.CreationTimestamp.Time
 	activeBackup := hasActive(jobs, jobcfg.ModeBackup)
 	activeVerify := hasActive(jobs, jobcfg.ModeVerify)
@@ -127,7 +127,7 @@ func (r *PolicyReconciler) startDue(ctx context.Context, p *v1alpha1.BackupPolic
 	return nil
 }
 
-func (r *PolicyReconciler) createJob(ctx context.Context, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, mode jobcfg.Mode, name string) error {
+func (r *PolicyReconciler) createJob(ctx context.Context, p *v1.BackupPolicy, store *v1.BackupStore, mode jobcfg.Mode, name string) error {
 	job, err := newJob(r.Scheme, r.Image, p, store, mode, name)
 	if err != nil {
 		return err
@@ -137,7 +137,7 @@ func (r *PolicyReconciler) createJob(ctx context.Context, p *v1alpha1.BackupPoli
 
 // triggerManual starts one backup Job when spec.trigger.manual holds a value that was not run yet, no
 // backup is running, and no verify whose pack reads the run's prune would race.
-func (r *PolicyReconciler) triggerManual(ctx context.Context, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, jobs []batchv1.Job) error {
+func (r *PolicyReconciler) triggerManual(ctx context.Context, p *v1.BackupPolicy, store *v1.BackupStore, jobs []batchv1.Job) error {
 	value := p.Spec.Trigger.Manual
 	if value == "" || value == p.Status.LastManualSync || hasActive(jobs, jobcfg.ModeBackup) || hasActive(jobs, jobcfg.ModeVerify) {
 		return nil
@@ -177,7 +177,7 @@ func (r *PolicyReconciler) pruneHistory(ctx context.Context, jobs []batchv1.Job)
 
 // requeueIn is how long until the controller must look at the policy again with no other event: the nearest
 // of the next backup slot, the next verify slot and the moment it turns stale.
-func requeueIn(p *v1alpha1.BackupPolicy, now time.Time) time.Duration {
+func requeueIn(p *v1.BackupPolicy, now time.Time) time.Duration {
 	var soonest time.Time
 	consider := func(t time.Time, ok bool) {
 		if ok && t.After(now) && (soonest.IsZero() || t.Before(soonest)) {

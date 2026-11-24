@@ -1,4 +1,4 @@
-# backshots reference
+# heirloom reference
 
 The detailed documentation: architecture, every behaviour and its limits, failure modes, the security model.
 For the overview and a five-minute start, see the [README](../README.md). Restore procedures are in
@@ -11,7 +11,7 @@ For the overview and a five-minute start, see the [README](../README.md). Restor
         |                              |  nfs: server + path
         v                              v
   +-----------+  creates a Job per due run, itself         +------------------+
-  | backshots | -----------------------------------------> | mover Job pod    |
+  | heirloom | -----------------------------------------> | mover Job pod    |
   | manager   |   (own scheduler: cron slots, no CronJob)  |  /source  PVC    |
   +-----------+                                            |  /store   NFS    |
         ^                                                  |  /scratch          |
@@ -36,8 +36,8 @@ returns it runs a missed slot once, not once per missed slot, and a policy turns
 too long passes without a success.
 
 Mover pods mount the PVC and only their own `<namespace>/<policy>` directory of the NFS export (a `subPath`
-mount, so one mover never sees another's backups) plus a scratch volume, and run the backshots binary
-(`backshots run`), which is copied in by an init container so database images (for example `postgres:16`)
+mount, so one mover never sees another's backups) plus a scratch volume, and run the heirloom binary
+(`heirloom run`), which is copied in by an init container so database images (for example `postgres:16`)
 can be used unchanged. The runner image ships `restic`, which the Dockerfile probes at build time.
 
 Backups are restic repositories, exclusively: each policy's backups are one restic repository at
@@ -52,7 +52,7 @@ Source types:
 | `files` | `restic backup .` from the volume root (or the `subPath` root), excludes via restic `--exclude` |
 | `sqlite` | consistent copy per database with the SQLite online backup API, staged under `.staging` then committed into the repository |
 | `postgres` | `pg_dump` `.sql.gz` per database plus `globals.sql.gz`, staged under `.staging` then committed into the repository |
-| `command` | a dump command `exec`'d in a running app pod (matched by `podSelector`); its stdout is gzipped to `command/<file>` in the snapshot. Any database with a CLI dump tool (mysql, mongodump, redis) fits without backshots growing a driver for it |
+| `command` | a dump command `exec`'d in a running app pod (matched by `podSelector`); its stdout is gzipped to `command/<file>` in the snapshot. Any database with a CLI dump tool (mysql, mongodump, redis) fits without heirloom growing a driver for it |
 
 ## On-disk layout
 
@@ -94,16 +94,16 @@ you no longer need them.
 2. Install the operator from the Helm repository:
 
    ```sh
-   helm repo add backshots https://willuhmjs.github.io/backshots
+   helm repo add heirloom https://willuhmjs.github.io/heirloom
    helm repo update
-   helm install backshots backshots/backshots \
-     --namespace backshots-system --create-namespace \
+   helm install heirloom heirloom/heirloom \
+     --namespace heirloom-system --create-namespace \
      --set store.create=true \
      --set store.nfs.server=192.168.1.5 \
      --set store.nfs.path=/volume1/k8s-backup
    ```
 
-   The chart is also published as an OCI artifact: `helm install backshots oci://ghcr.io/willuhmjs/charts/backshots`.
+   The chart is also published as an OCI artifact: `helm install heirloom oci://ghcr.io/willuhmjs/charts/heirloom`.
    Or apply `examples/store.yaml` yourself.
 3. Apply a policy in the namespace of the PVC:
 
@@ -209,7 +209,7 @@ under the restore, then put back on completion. On clusters before 1.30 whose AP
 autoscaler is left running with a warning on the Restore instead of failing it.
 If the workloads do not stop within 5 minutes the restore fails and they are scaled back up, because nothing was restored. If the restore itself fails the workloads stay down unless
 `scaleUpOnFailure: true`, since the data may be half written. A `Restore` with `scaleDown` carries the
-finalizer `backshots.io/restore`: deleting it mid-flight puts the workloads back first. A files restore of a
+finalizer `heirloom.io/restore`: deleting it mid-flight puts the workloads back first. A files restore of a
 policy with `subPath` writes back into that subPath, and `delete: true` never removes paths the backup
 excludes.
 
@@ -244,7 +244,7 @@ failed the way rsync did); postgres `databases`, `excludeDatabases`, `globals` (
 `no-role-passwords` for a least-privilege backup role, or `skip`); command `podSelector`, `container`,
 `command` (its stdout becomes the dump), `file` (the name inside `command/` in the snapshot), and the
 optional `preCommand`/`postCommand` quiesce hooks. A command mover runs as a scoped, namespace-local
-`backshots-executor` ServiceAccount the controller maintains only for command policies — its Role grants
+`heirloom-executor` ServiceAccount the controller maintains only for command policies — its Role grants
 nothing but reading pods and `pods/exec`, nothing else. `preCommand` must exit 0 before the dump starts (the
 place to take a read lock); `postCommand` runs no matter how the dump ended, so a quiesce is always undone
 even if the run is cancelled or expires. The dump command must select exactly one Running, ready pod; if
@@ -285,17 +285,17 @@ authorized caller: a TokenReview of the bearer token and a SubjectAccessReview f
 ClusterRole `<release>-metrics-reader` to whatever scrapes it. `--set serviceMonitor.enabled=true` renders a
 ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network you can turn this off with
 `--set metrics.secure=false` (plain HTTP, no authentication, on the same port). Alert on
-`backshots_policy_healthy == 0`, which also covers a policy that has never succeeded, and on
-`backshots_last_verify_ok == 0`. Gauges, each labelled `namespace` and `policy`:
+`heirloom_policy_healthy == 0`, which also covers a policy that has never succeeded, and on
+`heirloom_last_verify_ok == 0`. Gauges, each labelled `namespace` and `policy`:
 
 | metric | meaning |
 |---|---|
-| `backshots_last_success_timestamp_seconds` | time of the last successful backup |
-| `backshots_last_snapshot_bytes` | size of the newest snapshot |
-| `backshots_last_verify_ok` | 1 if the last verify passed, else 0 |
-| `backshots_snapshots_kept` | snapshots retained after the last run |
-| `backshots_policy_healthy` | 1 if `Healthy` is True, 0 if False (failed or stale); absent while Unknown |
-| `backshots_policy_created_timestamp_seconds` | when the policy was created |
+| `heirloom_last_success_timestamp_seconds` | time of the last successful backup |
+| `heirloom_last_snapshot_bytes` | size of the newest snapshot |
+| `heirloom_last_verify_ok` | 1 if the last verify passed, else 0 |
+| `heirloom_snapshots_kept` | snapshots retained after the last run |
+| `heirloom_policy_healthy` | 1 if `Healthy` is True, 0 if False (failed or stale); absent while Unknown |
+| `heirloom_policy_created_timestamp_seconds` | when the policy was created |
 
 ## Failure modes
 
@@ -306,7 +306,7 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 | source empty or recreated | run fails the guard: the run's snapshot file count is compared against the previous snapshot's (both from restic summaries), and 0 files or a shrink below `minSourcePercent` fails the run; restic itself also refuses to snapshot an empty tree. restic has committed the snapshot by the time the guard trips, so the runner `restic forget`s that rejected snapshot: history stays ending at the last good one and `from: latest` never hands back the shrunken tree (its freed packs are reclaimed by the next run's prune) |
 | repo lock left by a killed run | every restic read path (`restore`, `check`) unlocks the repository before starting, so a stale lock from a run that died mid-flight cannot make the next mover hang retrying a lock save forever |
 | run longer than the interval | no second run starts while one is active; the due slot runs as soon as it finishes (once), and `activeDeadlineSeconds` kills a stuck run |
-| operator down | a run already in progress finishes, but no new scheduled run starts and status stops updating; on return a missed slot runs once. Alert on `Stale` and on a missing or old `backshots_last_success_timestamp_seconds` |
+| operator down | a run already in progress finishes, but no new scheduled run starts and status stops updating; on return a missed slot runs once. Alert on `Stale` and on a missing or old `heirloom_last_success_timestamp_seconds` |
 | crash mid-run | no snapshot is published (restic commits it only at the end); the transient `.staging` tree is swept at the start of the next run and packs the killed run uploaded are unreferenced and removed by the next `forget --prune` |
 
 ## Security
@@ -376,23 +376,23 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 - The `subPath` mount makes kubelet create `<namespace>/<policy>` on the export the first time, as root, so
   the export needs `no_root_squash` (already required for ownership). A verify or restore for a policy that
   has never run a backup fails cleanly: its restic repository does not exist yet.
-- CRDs in `charts/backshots/crds` install on first `helm install` only. On upgrade, run
-  `kubectl apply -f charts/backshots/crds/`.
+- CRDs in `charts/heirloom/crds` install on first `helm install` only. On upgrade, run
+  `kubectl apply -f charts/heirloom/crds/`.
 - Block-level or application-consistent snapshots of arbitrary workloads are out of scope. Files are
   copied live; use a database source type for databases.
 
 ## Compared to other tools
 
 - **VolSync**: restic/rclone/rsync movers with CSI snapshot support; excellent for encrypted offsite
-  copies and block-consistent replication. Backshots trades that breadth for one NFS export, GFS
+  copies and block-consistent replication. Heirloom trades that breadth for one NFS export, GFS
   retention, and a built-in dump-and-verify flow for sqlite and postgres.
 - **k8up**: also restic-based with a similar operator model, but S3-centric with restic profiles and
-  offsite sync. Backshots is the plain local backend on NFS: no provider configuration, nothing listening
+  offsite sync. Heirloom is the plain local backend on NFS: no provider configuration, nothing listening
   on a port.
 - **Velero**: cluster-wide object and volume backup with cloud snapshots; far broader scope, much
   heavier, and restores need Velero.
 
-Use those if you need encryption at rest, offsite object storage or CSI snapshots. Use backshots if you
+Use those if you need encryption at rest, offsite object storage or CSI snapshots. Use heirloom if you
 have one NFS export and want deduplicated, verified backups with no extra services: no rest-server, no
 object storage, nothing to operate besides the operator.
 

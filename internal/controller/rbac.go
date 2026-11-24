@@ -7,15 +7,15 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
+	"github.com/willuhmjs/heirloom/api/v1"
 )
 
 // ensureExecutorRBAC maintains the namespace-local identity a command-source mover needs to exec
-// into app pods: the ServiceAccount backshots-executor, a Role granting nothing but reading pods and
+// into app pods: the ServiceAccount heirloom-executor, a Role granting nothing but reading pods and
 // creating pods/exec, and the RoleBinding joining them. The objects are shared by every command
 // policy in the namespace, so they carry non-controller owner references from each policy that needs
 // them and garbage-collect once the last one is gone.
-func (r *PolicyReconciler) ensureExecutorRBAC(ctx context.Context, p *v1alpha1.BackupPolicy) error {
+func (r *PolicyReconciler) ensureExecutorRBAC(ctx context.Context, p *v1.BackupPolicy) error {
 	if err := createOrAddOwner(ctx, r.Client, r.Reader, r.Scheme, p, &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: ExecutorServiceAccount, Namespace: p.Namespace},
 	}, &corev1.ServiceAccount{}); err != nil {

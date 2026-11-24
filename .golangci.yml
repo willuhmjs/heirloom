@@ -13,7 +13,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/willuhmjs/backshots
+        - github.com/willuhmjs/heirloom
 
 linters:
   # standard = errcheck, govet, ineffassign, staticcheck, unused.

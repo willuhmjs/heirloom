@@ -47,7 +47,7 @@ jobs:
       - name: Generated CRDs are up to date
         run: |
           make manifests
-          git diff --exit-code config/crd charts/backshots/crds
+          git diff --exit-code config/crd charts/heirloom/crds
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-      - run: helm lint charts/backshots
+      - run: helm lint charts/heirloom
       - run: make helm-template >/dev/null
   docker:
     runs-on: ubuntu-latest

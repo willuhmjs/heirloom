@@ -1,4 +1,4 @@
-module github.com/willuhmjs/backshots
+module github.com/willuhmjs/heirloom
 
 go 1.27.4
 

@@ -15,11 +15,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
-const testImage = "ghcr.io/willuhmjs/backshots:test"
+const testImage = "ghcr.io/willuhmjs/heirloom:test"
 
 var testNow = time.Date(2026, 11, 22, 10, 0, 30, 0, time.UTC)
 
@@ -29,7 +29,7 @@ func newFake(t *testing.T, objs ...client.Object) client.Client {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
+	if err := v1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	// The PVCs the test policies point at exist, as they would in a real cluster (a restore checks for them).
@@ -37,38 +37,38 @@ func newFake(t *testing.T, objs ...client.Object) client.Client {
 		objs = append(objs, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "apps"}})
 	}
 	return fake.NewClientBuilder().WithScheme(scheme).
-		WithStatusSubresource(&v1alpha1.BackupPolicy{}, &v1alpha1.Restore{}).
+		WithStatusSubresource(&v1.BackupPolicy{}, &v1.Restore{}).
 		WithObjects(objs...).Build()
 }
 
-func testStore() *v1alpha1.BackupStore {
-	return &v1alpha1.BackupStore{
+func testStore() *v1.BackupStore {
+	return &v1.BackupStore{
 		ObjectMeta: metav1.ObjectMeta{Name: "nas"},
-		Spec:       v1alpha1.BackupStoreSpec{NFS: v1alpha1.NFSSpec{Server: "10.0.0.2", Path: "/volume1/k8s"}},
+		Spec:       v1.BackupStoreSpec{NFS: v1.NFSSpec{Server: "10.0.0.2", Path: "/volume1/k8s"}},
 	}
 }
 
-func filesPolicy() *v1alpha1.BackupPolicy {
-	return &v1alpha1.BackupPolicy{
+func filesPolicy() *v1.BackupPolicy {
+	return &v1.BackupPolicy{
 		// Created at the test clock: nothing is due until a test moves the creation time back (policyDue).
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "apps", UID: "uid-1", CreationTimestamp: metav1.NewTime(testNow)},
-		Spec: v1alpha1.BackupPolicySpec{
+		Spec: v1.BackupPolicySpec{
 			StoreRef: "nas",
 			Schedule: "0 * * * *",
-			Source:   v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "app-data"}},
+			Source:   v1.Source{Type: v1.SourceFiles, Files: &v1.FilesSource{PVC: "app-data"}},
 		},
 	}
 }
 
-func sqlitePolicy() *v1alpha1.BackupPolicy {
+func sqlitePolicy() *v1.BackupPolicy {
 	p := filesPolicy()
-	p.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "db", Paths: []string{"a.db"}}}
+	p.Spec.Source = v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "db", Paths: []string{"a.db"}}}
 	return p
 }
 
-func postgresPolicy() *v1alpha1.BackupPolicy {
+func postgresPolicy() *v1.BackupPolicy {
 	p := filesPolicy()
-	p.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourcePostgres, Postgres: &v1alpha1.PostgresSource{
+	p.Spec.Source = v1.Source{Type: v1.SourcePostgres, Postgres: &v1.PostgresSource{
 		Image: "postgres:16", Host: "pg.db", Port: 5432, User: "postgres",
 		PasswordSecretRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pg"}, Key: "password"},
 	}}

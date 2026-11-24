@@ -1,7 +1,7 @@
-backshots {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+heirloom {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
 
 CRDs in crds/ are installed only on first install. After upgrading to a version with API
-changes, apply them by hand:  kubectl apply -f charts/backshots/crds/
+changes, apply them by hand:  kubectl apply -f charts/heirloom/crds/
 
 {{- if .Values.store.create }}
 
@@ -10,7 +10,7 @@ BackupStore "{{ .Values.store.name }}" points at {{ .Values.store.nfs.server }}:
 
 No BackupStore was created. Create one (cluster-scoped), e.g.:
 
-  apiVersion: backshots.io/v1alpha1
+  apiVersion: heirloom.io/v1
   kind: BackupStore
   metadata: {name: default}
   spec:
@@ -20,7 +20,7 @@ No BackupStore was created. Create one (cluster-scoped), e.g.:
 Apply your first BackupPolicy (in the namespace of the PVC):
 
   kubectl apply -f - <<YAML
-  apiVersion: backshots.io/v1alpha1
+  apiVersion: heirloom.io/v1
   kind: BackupPolicy
   metadata: {name: myapp-files, namespace: myapp}
   spec:

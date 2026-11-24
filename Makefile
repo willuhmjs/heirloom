@@ -1,12 +1,12 @@
-IMG ?= ghcr.io/willuhmjs/backshots:0.1.0
-CHART := charts/backshots
+IMG ?= ghcr.io/willuhmjs/heirloom:1.0.0
+CHART := charts/heirloom
 
 .PHONY: all build test lint manifests crds-chart docker-build helm-lint helm-template
 
 all: build
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/backshots ./cmd
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/heirloom ./cmd
 
 test:
 	go test ./...
@@ -33,5 +33,5 @@ helm-lint:
 	helm lint $(CHART)
 
 helm-template:
-	helm template backshots $(CHART) --namespace backshots \
+	helm template heirloom $(CHART) --namespace heirloom \
 	  --set store.create=true --set store.nfs.server=192.168.1.5 --set store.nfs.path=/volume1/k8s-backup

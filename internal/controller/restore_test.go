@@ -15,8 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 func testDeployment(annotations map[string]string) *appsv1.Deployment {
@@ -28,16 +28,16 @@ func testDeployment(annotations map[string]string) *appsv1.Deployment {
 	}
 }
 
-func testRestore(mutate func(*v1alpha1.Restore)) *v1alpha1.Restore {
+func testRestore(mutate func(*v1.Restore)) *v1.Restore {
 	// Paths and delete exclude each other (delete+paths is rejected for every policy), so the fixture
 	// restricts by path only.
-	rs := &v1alpha1.Restore{
+	rs := &v1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "apps", UID: "uid-r"},
-		Spec: v1alpha1.RestoreSpec{
+		Spec: v1.RestoreSpec{
 			PolicyRef: "app",
 			From:      "latest",
 			Paths:     []string{"conf"},
-			ScaleDown: []v1alpha1.WorkloadRef{{Kind: "Deployment", Name: "web"}},
+			ScaleDown: []v1.WorkloadRef{{Kind: "Deployment", Name: "web"}},
 		},
 	}
 	if mutate != nil {
@@ -50,9 +50,9 @@ func newRestoreReconciler(c client.Client) *RestoreReconciler {
 	return &RestoreReconciler{Client: c, Reader: c, Scheme: c.Scheme(), Image: testImage, Now: func() time.Time { return testNow }}
 }
 
-func getRestore(t *testing.T, c client.Client) *v1alpha1.Restore {
+func getRestore(t *testing.T, c client.Client) *v1.Restore {
 	t.Helper()
-	var rs v1alpha1.Restore
+	var rs v1.Restore
 	mustGet(t, c, "apps", "r1", &rs)
 	return &rs
 }
@@ -201,7 +201,7 @@ func TestRestoreFailureLeavesWorkloadDownByDefault(t *testing.T) {
 }
 
 func TestRestoreFailureScalesUpWhenRequested(t *testing.T) {
-	rs := testRestore(func(r *v1alpha1.Restore) { r.Spec.ScaleUpOnFailure = true })
+	rs := testRestore(func(r *v1.Restore) { r.Spec.ScaleUpOnFailure = true })
 	c := newFake(t, testStore(), filesPolicy(), testDeployment(nil), rs)
 	r := newRestoreReconciler(c)
 	driveToRunning(t, c, r)
@@ -222,7 +222,7 @@ func TestRestoreFailureScalesUpWhenRequested(t *testing.T) {
 }
 
 func TestRestoreWithoutScaleDownSkipsScaling(t *testing.T) {
-	rs := testRestore(func(r *v1alpha1.Restore) { r.Spec.ScaleDown = nil })
+	rs := testRestore(func(r *v1.Restore) { r.Spec.ScaleDown = nil })
 	c := newFake(t, testStore(), sqlitePolicy(), rs)
 	r := newRestoreReconciler(c)
 	reconcileKey(t, r, "apps", "r1")
@@ -232,7 +232,7 @@ func TestRestoreWithoutScaleDownSkipsScaling(t *testing.T) {
 		t.Fatalf("status = %+v", got.Status)
 	}
 
-	valid := testRestore(func(r *v1alpha1.Restore) {
+	valid := testRestore(func(r *v1.Restore) {
 		r.Name, r.Spec.ScaleDown, r.Spec.Paths, r.Spec.Delete, r.Spec.TargetPVC = "r2", nil, nil, false, "scratch-pvc"
 	})
 	scratch := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "scratch-pvc", Namespace: "apps"}}
@@ -253,7 +253,7 @@ func TestRestoreWithoutScaleDownSkipsScaling(t *testing.T) {
 }
 
 func TestRestorePostgresJob(t *testing.T) {
-	rs := testRestore(func(r *v1alpha1.Restore) {
+	rs := testRestore(func(r *v1.Restore) {
 		r.Spec.ScaleDown, r.Spec.Paths, r.Spec.Delete = nil, nil, false
 		r.Spec.Databases = []string{"app"}
 	})
@@ -308,12 +308,12 @@ func driveToRunningUntilStopped(t *testing.T, c client.Client, r *RestoreReconci
 
 // Typos are caught before any workload is stopped.
 func TestRestoreRejectsBadInputsBeforeScalingDown(t *testing.T) {
-	cases := map[string]func(*v1alpha1.Restore){
-		"from":        func(r *v1alpha1.Restore) { r.Spec.From = "2026-11-22" },
-		"path":        func(r *v1alpha1.Restore) { r.Spec.Paths = []string{"a/../../etc"} },
-		"database":    func(r *v1alpha1.Restore) { r.Spec.Databases = []string{"a/b"} },
-		"pvc":         func(r *v1alpha1.Restore) { r.Spec.TargetPVC = "does-not-exist" },
-		"name length": func(r *v1alpha1.Restore) { r.Name = strings.Repeat("x", maxRestoreNameLen+1) },
+	cases := map[string]func(*v1.Restore){
+		"from":        func(r *v1.Restore) { r.Spec.From = "2026-11-22" },
+		"path":        func(r *v1.Restore) { r.Spec.Paths = []string{"a/../../etc"} },
+		"database":    func(r *v1.Restore) { r.Spec.Databases = []string{"a/b"} },
+		"pvc":         func(r *v1.Restore) { r.Spec.TargetPVC = "does-not-exist" },
+		"name length": func(r *v1.Restore) { r.Name = strings.Repeat("x", maxRestoreNameLen+1) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -323,7 +323,7 @@ func TestRestoreRejectsBadInputsBeforeScalingDown(t *testing.T) {
 			for range 3 {
 				reconcileKey(t, r, "apps", rs.Name)
 			}
-			var got v1alpha1.Restore
+			var got v1.Restore
 			mustGet(t, c, "apps", rs.Name, &got)
 			if got.Status.Phase != phaseFailed || got.Status.Message == "" {
 				t.Fatalf("status = %+v", got.Status)
@@ -380,18 +380,18 @@ func TestDeletingARestoreScalesWorkloadsBackUp(t *testing.T) {
 	if d := getDeployment(t, c); *d.Spec.Replicas != 3 {
 		t.Errorf("replicas = %d after delete, want 3", *d.Spec.Replicas)
 	}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "apps", Name: "r1"}, &v1alpha1.Restore{}); !apierrors.IsNotFound(err) {
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "apps", Name: "r1"}, &v1.Restore{}); !apierrors.IsNotFound(err) {
 		t.Errorf("restore should be gone once the finalizer ran: %v", err)
 	}
 }
 
 // Two restores of one policy run one after the other, oldest first.
 func TestRestoresOfOnePolicyQueue(t *testing.T) {
-	older := testRestore(func(r *v1alpha1.Restore) {
+	older := testRestore(func(r *v1.Restore) {
 		r.Spec.ScaleDown = nil
 		r.CreationTimestamp = metav1.NewTime(testNow.Add(-time.Minute))
 	})
-	newer := testRestore(func(r *v1alpha1.Restore) {
+	newer := testRestore(func(r *v1.Restore) {
 		r.Name, r.Spec.ScaleDown = "r2", nil
 		r.CreationTimestamp = metav1.NewTime(testNow)
 	})
@@ -399,7 +399,7 @@ func TestRestoresOfOnePolicyQueue(t *testing.T) {
 	r := newRestoreReconciler(c)
 	reconcileKey(t, r, "apps", "r2") // "" -> Pending
 	res := reconcileKey(t, r, "apps", "r2")
-	var got v1alpha1.Restore
+	var got v1.Restore
 	mustGet(t, c, "apps", "r2", &got)
 	if got.Status.Phase != phasePending || !strings.Contains(got.Status.Message, `waiting for restore "r1"`) || res.RequeueAfter == 0 {
 		t.Fatalf("the newer restore must wait: %+v %+v", got.Status, res)
@@ -420,9 +420,9 @@ func TestRestoresOfOnePolicyQueue(t *testing.T) {
 // Timestamp snapshot-folder names from the removed snapshots engine are no longer valid.
 func TestRestoreFromAcceptsLatestOrID(t *testing.T) {
 	p := filesPolicy()
-	rs := &v1alpha1.Restore{
+	rs := &v1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
-		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app"},
+		Spec:       v1.RestoreSpec{PolicyRef: "app"},
 	}
 	for _, from := range []string{"", "latest", "deadbeef", "abc12345", strings.Repeat("ab", 32)} {
 		rs.Spec.From = from
@@ -442,11 +442,11 @@ func TestRestoreFromAcceptsLatestOrID(t *testing.T) {
 // never deleted. restic refuses exclude together with include, so delete and paths cannot both keep
 // that guarantee; every policy rejects the combination rather than surprise the user mid-restore.
 func TestRestoreRejectsDeleteWithPaths(t *testing.T) {
-	rs := &v1alpha1.Restore{
+	rs := &v1.Restore{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps"},
-		Spec:       v1alpha1.RestoreSpec{PolicyRef: "app", Delete: true, Paths: []string{"keep"}},
+		Spec:       v1.RestoreSpec{PolicyRef: "app", Delete: true, Paths: []string{"keep"}},
 	}
-	for _, p := range []*v1alpha1.BackupPolicy{filesPolicy(), sqlitePolicy(), postgresPolicy()} {
+	for _, p := range []*v1.BackupPolicy{filesPolicy(), sqlitePolicy(), postgresPolicy()} {
 		if err := validateRestore(rs, p); err == nil {
 			t.Errorf("delete with paths must be rejected on a %s policy", p.Spec.Source.Type)
 		}

@@ -1,23 +1,23 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "backshots.fullname" . }}
+  name: {{ include "heirloom.fullname" . }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [backshots.io]
+  - apiGroups: [heirloom.io]
     resources: [backupstores, backuppolicies, restores]
     verbs: [get, list, watch]
-  - apiGroups: [backshots.io]
+  - apiGroups: [heirloom.io]
     resources: [backuppolicies/status, restores/status]
     verbs: [get, update]
   # A Restore carries a finalizer so that deleting it mid-flight puts scaled-down workloads back (metadata update).
-  - apiGroups: [backshots.io]
+  - apiGroups: [heirloom.io]
     resources: [restores]
     verbs: [update]
   # Jobs are owned by their policy or restore with blockOwnerDeletion, which needs this where the
   # OwnerReferencesPermissionEnforcement admission plugin is on.
-  - apiGroups: [backshots.io]
+  - apiGroups: [heirloom.io]
     resources: [backuppolicies/finalizers, restores/finalizers]
     verbs: [update]
   # A restore checks that the claim it writes to exists before it stops any workload (uncached get only).
@@ -68,25 +68,25 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "backshots.fullname" . }}
+  name: {{ include "heirloom.fullname" . }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "backshots.fullname" . }}
+  name: {{ include "heirloom.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "backshots.fullname" . }}
+    name: {{ include "heirloom.fullname" . }}
     namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "backshots.fullname" . }}-leader-election
+  name: {{ include "heirloom.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 rules:
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
@@ -98,15 +98,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "backshots.fullname" . }}-leader-election
+  name: {{ include "heirloom.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "backshots.fullname" . }}-leader-election
+  name: {{ include "heirloom.fullname" . }}-leader-election
 subjects:
   - kind: ServiceAccount
-    name: {{ include "backshots.fullname" . }}
+    name: {{ include "heirloom.fullname" . }}
     namespace: {{ .Release.Namespace }}

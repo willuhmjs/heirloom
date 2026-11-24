@@ -1,5 +1,5 @@
 # Synology-style NFS export. Squash must be "No mapping" so root can write and chown.
-apiVersion: backshots.io/v1alpha1
+apiVersion: heirloom.io/v1
 kind: BackupStore
 metadata:
   name: default

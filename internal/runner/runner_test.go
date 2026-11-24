@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 func mkdir(t *testing.T, p ...string) string {
@@ -107,7 +107,7 @@ func need(t *testing.T, bin string) {
 
 // testRunner builds a runner on temp dirs, including the scratch mount restic caches and stages restores
 // through; the clock advances one hour per call so run timestamps differ.
-func testRunner(t *testing.T, mode jobcfg.Mode, spec v1alpha1.BackupPolicySpec) *runner {
+func testRunner(t *testing.T, mode jobcfg.Mode, spec v1.BackupPolicySpec) *runner {
 	t.Helper()
 	root := t.TempDir()
 	r := newRunner(jobcfg.Config{Mode: mode, Namespace: "ns", Policy: "p", Spec: spec,
@@ -129,8 +129,8 @@ func TestSQLiteBackupVerifyRestore(t *testing.T) {
 	need(t, "sqlite3")
 	requireRestic(t)
 	ctx := t.Context()
-	r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"db/app.db", "other.db"}}},
+	r := testRunner(t, jobcfg.ModeBackup, v1.BackupPolicySpec{
+		Source: v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "x", Paths: []string{"db/app.db", "other.db"}}},
 	})
 	sq := func(p, q string) string {
 		t.Helper()
@@ -262,8 +262,8 @@ func TestResolveWithin(t *testing.T) {
 }
 
 func TestVerifyDatabaseIsNeverGuessed(t *testing.T) {
-	pg := func(dbs ...string) v1alpha1.BackupPolicySpec {
-		return v1alpha1.BackupPolicySpec{Source: v1alpha1.Source{Postgres: &v1alpha1.PostgresSource{Databases: dbs}}}
+	pg := func(dbs ...string) v1.BackupPolicySpec {
+		return v1.BackupPolicySpec{Source: v1.Source{Postgres: &v1.PostgresSource{Databases: dbs}}}
 	}
 	if _, err := verifyDatabase(pg(), []string{"app", "other", "postgres"}); err == nil {
 		t.Error("several databases and no verify.database must be an error")
@@ -272,7 +272,7 @@ func TestVerifyDatabaseIsNeverGuessed(t *testing.T) {
 		t.Errorf("single listed database: %q %v", got, err)
 	}
 	s := pg()
-	s.Verify = &v1alpha1.Verify{Database: "other"}
+	s.Verify = &v1.Verify{Database: "other"}
 	if got, err := verifyDatabase(s, []string{"app", "other"}); err != nil || got != "other" {
 		t.Errorf("explicit database: %q %v", got, err)
 	}
@@ -289,8 +289,8 @@ func TestSymlinkEscapeIsRefused(t *testing.T) {
 	write(t, filepath.Join(outside, "secret.db"), "secret")
 
 	t.Run("files subPath", func(t *testing.T) {
-		r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-			Source: v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "x", SubPath: "link"}},
+		r := testRunner(t, jobcfg.ModeBackup, v1.BackupPolicySpec{
+			Source: v1.Source{Type: v1.SourceFiles, Files: &v1.FilesSource{PVC: "x", SubPath: "link"}},
 		})
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
 			t.Fatal(err)
@@ -301,8 +301,8 @@ func TestSymlinkEscapeIsRefused(t *testing.T) {
 	})
 
 	t.Run("sqlite staging", func(t *testing.T) {
-		r := testRunner(t, jobcfg.ModeBackup, v1alpha1.BackupPolicySpec{
-			Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
+		r := testRunner(t, jobcfg.ModeBackup, v1.BackupPolicySpec{
+			Source: v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
 		})
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
 			t.Fatal(err)
@@ -317,8 +317,8 @@ func TestSymlinkEscapeIsRefused(t *testing.T) {
 	})
 
 	t.Run("restore destination", func(t *testing.T) {
-		r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
-			Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
+		r := testRunner(t, jobcfg.ModeRestore, v1.BackupPolicySpec{
+			Source: v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "x", Paths: []string{"link/secret.db"}}},
 		})
 		r.cfg.Restore = &jobcfg.Restore{From: "latest"}
 		if err := os.Symlink(outside, filepath.Join(r.source, "link")); err != nil {
@@ -362,8 +362,8 @@ func TestSQLiteCheckWorksOnReadOnlyWALCopy(t *testing.T) {
 // A rollback journal left by the old database is "hot" for the restored file: SQLite would roll it back
 // onto the restored data. It must be removed like -wal and -shm.
 func TestSQLiteRestoreRemovesAllStaleSidecars(t *testing.T) {
-	r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
+	r := testRunner(t, jobcfg.ModeRestore, v1.BackupPolicySpec{
+		Source: v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
 	})
 	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
 	stage := mkdir(t, r.scratch, "restic-restore")
@@ -391,8 +391,8 @@ func TestSQLiteRestoreIntoNewVolumeInheritsDirectoryOwner(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to create files owned by another user")
 	}
-	r := testRunner(t, jobcfg.ModeRestore, v1alpha1.BackupPolicySpec{
-		Source: v1alpha1.Source{Type: v1alpha1.SourceSQLite, SQLite: &v1alpha1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
+	r := testRunner(t, jobcfg.ModeRestore, v1.BackupPolicySpec{
+		Source: v1.Source{Type: v1.SourceSQLite, SQLite: &v1.SQLiteSource{PVC: "x", Paths: []string{"a.db"}}},
 	})
 	r.cfg.Restore = &jobcfg.Restore{From: "latest"}
 	stage := mkdir(t, r.scratch, "restic-restore")

@@ -11,13 +11,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 const (
-	annotationManual    = "backshots.io/manual"
-	annotationManualGen = "backshots.io/manual-generation"
+	annotationManual    = "heirloom.io/manual"
+	annotationManualGen = "heirloom.io/manual-generation"
 )
 
 // scheduledJobName names the Job of one schedule slot. It is derived from the slot (not from the time the
@@ -43,7 +43,7 @@ func shortHash(s string) string {
 }
 
 // newJob renders a backup or verify Job of a policy, owned by the policy.
-func newJob(scheme *runtime.Scheme, runnerImage string, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore, mode jobcfg.Mode, name string) (*batchv1.Job, error) {
+func newJob(scheme *runtime.Scheme, runnerImage string, p *v1.BackupPolicy, store *v1.BackupStore, mode jobcfg.Mode, name string) (*batchv1.Job, error) {
 	pod, err := moverPod{
 		mode:        mode,
 		namespace:   p.Namespace,

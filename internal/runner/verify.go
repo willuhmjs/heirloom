@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // verify proves the newest snapshot in the policy's restic repository can actually be read back:
@@ -39,13 +39,13 @@ func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
 	verified := "check ok, read-data-subset " + subset
 
 	switch r.cfg.Spec.Source.Type {
-	case v1alpha1.SourceFiles, v1alpha1.SourceCommand:
+	case v1.SourceFiles, v1.SourceCommand:
 		n, err := r.resticVerifySampleFiles(ctx, snap.ID)
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
 		}
 		verified += fmt.Sprintf(", %d sample files checksummed", n)
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		stage, err := r.stageSnapshot(ctx, snap)
 		if err == nil {
 			err = r.verifySQLite(ctx, stage)
@@ -54,7 +54,7 @@ func (r *runner) verify(ctx context.Context, res *jobcfg.Result) error {
 			return fmt.Errorf("verify %s: %w", snap.ShortID, err)
 		}
 		verified += ", sqlite integrity_check ok"
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		stage, err := r.stageSnapshot(ctx, snap)
 		if err == nil {
 			err = r.verifyPostgres(ctx, stage)
@@ -238,7 +238,7 @@ func (r *runner) verifyPostgres(ctx context.Context, dir string) (err error) {
 
 // verifyDatabase picks the database the SQL assertions run against: verify.database, else the single
 // database the policy dumps. It never guesses between several.
-func verifyDatabase(spec v1alpha1.BackupPolicySpec, restored []string) (string, error) {
+func verifyDatabase(spec v1.BackupPolicySpec, restored []string) (string, error) {
 	name := ""
 	if spec.Verify != nil {
 		name = spec.Verify.Database
@@ -259,7 +259,7 @@ func verifyDatabase(spec v1alpha1.BackupPolicySpec, restored []string) (string, 
 	return "", fmt.Errorf("verify.database %q is not in the snapshot (has %s)", name, strings.Join(restored, ", "))
 }
 
-func verifySQL(v *v1alpha1.Verify) []string {
+func verifySQL(v *v1.Verify) []string {
 	if v == nil {
 		return nil
 	}

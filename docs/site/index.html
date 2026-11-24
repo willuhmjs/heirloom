@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>backshots: Kubernetes-native, deduplicated backups that land on your NAS</title>
+<title>heirloom: Kubernetes-native, deduplicated backups that land on your NAS</title>
 <meta name="description" content="A small Kubernetes operator that backs up your volumes and databases to one NFS export as deduplicated restic repositories. App-consistent Postgres and SQLite, retention, and restore tests built in. No server, no keys.">
 <link rel="icon" href="logo.svg">
 <style>
@@ -37,21 +37,21 @@
 </head>
 <body>
 <header><div class="wrap">
-  <div class="brand"><img src="logo.svg" alt=""><h1>backshots</h1></div>
+  <div class="brand"><img src="logo.svg" alt=""><h1>heirloom</h1></div>
   <p class="tag">Kubernetes-native backups that land on your NAS as deduplicated restic repositories. No keys, no S3, no backup service to run.</p>
   <div class="pills"><span class="pill">dedup, no keys</span><span class="pill">app-consistent databases</span><span class="pill">restores that are tested</span></div>
-  <div class="btns"><a class="btn p" href="#install">Install with Helm</a><a class="btn s" href="https://github.com/willuhmjs/backshots">GitHub</a><a class="btn s" href="https://github.com/willuhmjs/backshots/blob/main/docs/REFERENCE.md">Docs</a></div>
+  <div class="btns"><a class="btn p" href="#install">Install with Helm</a><a class="btn s" href="https://github.com/willuhmjs/heirloom">GitHub</a><a class="btn s" href="https://github.com/willuhmjs/heirloom/blob/main/docs/REFERENCE.md">Docs</a></div>
 </div></header>
 
 <main class="wrap">
 <section id="install">
   <h2>Install</h2>
 <pre><button class="copy" onclick="cp(this)">copy</button><span class="cm"># add the chart repository</span>
-helm repo add backshots https://willuhmjs.github.io/backshots
+helm repo add heirloom https://willuhmjs.github.io/heirloom
 helm repo update
 
 <span class="cm"># install the operator and point it at your NFS export</span>
-helm install backshots backshots/backshots -n backshots-system --create-namespace \
+helm install heirloom heirloom/heirloom -n heirloom-system --create-namespace \
   --set store.create=true \
   --set store.nfs.server=192.168.1.5 \
   --set store.nfs.path=/volume1/k8s-backup</pre>
@@ -59,7 +59,7 @@ helm install backshots backshots/backshots -n backshots-system --create-namespac
 
 <section>
   <h2>Back up an app in one manifest</h2>
-<pre><button class="copy" onclick="cp(this)">copy</button><span class="k">apiVersion</span>: backshots.io/v1alpha1
+<pre><button class="copy" onclick="cp(this)">copy</button><span class="k">apiVersion</span>: heirloom.io/v1
 <span class="k">kind</span>: BackupPolicy
 <span class="k">metadata</span>: {name: gitea-db, namespace: gitea}
 <span class="k">spec</span>:
@@ -109,8 +109,8 @@ restic -r gitea/gitea-data/restic --insecure-no-password restore latest --target
 </section>
 </main>
 
-<footer><div class="wrap">backshots is Apache-2.0 licensed. <a href="https://github.com/willuhmjs/backshots">github.com/willuhmjs/backshots</a> ·
-<a href="index.yaml">Helm repository index</a> · API <code>backshots.io/v1alpha1</code></div></footer>
+<footer><div class="wrap">heirloom is Apache-2.0 licensed. <a href="https://github.com/willuhmjs/heirloom">github.com/willuhmjs/heirloom</a> ·
+<a href="index.yaml">Helm repository index</a> · API <code>heirloom.io/v1</code></div></footer>
 <script>function cp(b){var t=b.parentNode.innerText.replace(/^copy\n?/,'');navigator.clipboard.writeText(t);b.textContent='copied';setTimeout(function(){b.textContent='copy'},1400)}</script>
 </body>
 </html>

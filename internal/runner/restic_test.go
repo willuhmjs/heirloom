@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 // requireRestic skips the tests that shell out to restic on machines without the binary; CI images ship it.
@@ -31,10 +31,10 @@ func requireRestic(t *testing.T) {
 func newResticRunner(t *testing.T, ret snapshot.Retention) (*runner, string) {
 	t.Helper()
 	requireRestic(t)
-	spec := v1alpha1.BackupPolicySpec{
+	spec := v1.BackupPolicySpec{
 		// The API server defaults this to 50; a fake config must carry the same value the runner would see.
 		MinSourcePercent: 50,
-		Source:           v1alpha1.Source{Type: v1alpha1.SourceFiles, Files: &v1alpha1.FilesSource{PVC: "p"}},
+		Source:           v1.Source{Type: v1.SourceFiles, Files: &v1.FilesSource{PVC: "p"}},
 	}
 	r := testRunner(t, jobcfg.ModeBackup, spec)
 	r.cfg.Retention = ret
@@ -391,7 +391,7 @@ func TestResticRestorePaths(t *testing.T) {
 // where the app's own import tool picks them up.
 func TestResticCommandRestoreRoundTrip(t *testing.T) {
 	r, _ := newResticRunner(t, snapshot.Retention{Hourly: 24})
-	r.cfg.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourceCommand, Command: &v1alpha1.CommandSource{
+	r.cfg.Spec.Source = v1.Source{Type: v1.SourceCommand, Command: &v1.CommandSource{
 		PodSelector: map[string]string{"app": "db"}, Command: []string{"true"}, File: "db.dump.gz",
 	}}
 	ctx := context.Background()
@@ -551,7 +551,7 @@ func TestResticPostgresStagesAndCommitsDumps(t *testing.T) {
 	requireRestic(t)
 	fakePGShellBin(t)
 	r, _ := newResticRunner(t, snapshot.Retention{Hourly: 24})
-	r.cfg.Spec.Source = v1alpha1.Source{Type: v1alpha1.SourcePostgres, Postgres: &v1alpha1.PostgresSource{
+	r.cfg.Spec.Source = v1.Source{Type: v1.SourcePostgres, Postgres: &v1.PostgresSource{
 		Host: "unused.invalid", Databases: []string{"app"},
 	}}
 	ctx := context.Background()

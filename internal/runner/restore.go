@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 
 // restore writes one snapshot from the policy's restic repository back to the volume: files trees
@@ -33,16 +33,16 @@ func (r *runner) restore(ctx context.Context, res *jobcfg.Result) error {
 	res.Files, res.Bytes = snap.Summary.TotalFilesProcessed, snap.Summary.TotalBytesProcessed
 
 	switch r.cfg.Spec.Source.Type {
-	case v1alpha1.SourceFiles:
+	case v1.SourceFiles:
 		err = r.restoreFiles(ctx, snap)
-	case v1alpha1.SourceCommand:
+	case v1.SourceCommand:
 		err = r.restoreCommand(ctx, snap)
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		var stage string
 		if stage, err = r.stageSnapshot(ctx, snap); err == nil {
 			err = r.restoreSQLite(stage)
 		}
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		var stage string
 		if stage, err = r.stageSnapshot(ctx, snap); err == nil {
 			err = r.restorePostgres(ctx, stage)
@@ -140,7 +140,7 @@ func (r *runner) stageSnapshot(ctx context.Context, snap *resticSnapshot) (strin
 	}
 	args := []string{"restore", snap.ID, "--target", stage}
 	switch r.cfg.Spec.Source.Type {
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		sq := r.cfg.Spec.Source.SQLite
 		if sq == nil {
 			return "", fmt.Errorf("source.sqlite is not set")
@@ -156,7 +156,7 @@ func (r *runner) stageSnapshot(ctx context.Context, snap *resticSnapshot) (strin
 			}
 			args = append(args, "--include", "/sqlite/"+rel)
 		}
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		// With an explicit database list, restore only those dumps; a full restore (no list) pulls
 		// the whole tree because restorePostgres also loads the globals from it.
 		if rs := r.cfg.Restore; rs != nil {
@@ -224,7 +224,7 @@ func replaceFile(src, dst string) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".backshots-restore-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".heirloom-restore-*")
 	if err != nil {
 		return err
 	}

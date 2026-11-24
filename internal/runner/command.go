@@ -22,7 +22,7 @@ import (
 
 // captureCommand runs the policy's command in a running app pod and streams its stdout, gzipped, to
 // stage/command/<file> — the same staging contract sqlite and postgres payloads follow, so the restic
-// commit path is shared. The mover talks to the API with the scoped backshots-executor identity the
+// commit path is shared. The mover talks to the API with the scoped heirloom-executor identity the
 // controller maintains for the policy (pods get/list and pods/exec create, nothing else).
 func (r *runner) captureCommand(ctx context.Context, stage string) error {
 	cs := r.cfg.Spec.Source.Command

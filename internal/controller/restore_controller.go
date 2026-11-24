@@ -22,25 +22,25 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 const (
-	phasePending     v1alpha1.RestorePhase = "Pending"
-	phaseScalingDown v1alpha1.RestorePhase = "ScalingDown"
-	phaseRunning     v1alpha1.RestorePhase = "Running"
-	phaseScalingUp   v1alpha1.RestorePhase = "ScalingUp"
-	phaseSucceeded   v1alpha1.RestorePhase = "Succeeded"
-	phaseFailed      v1alpha1.RestorePhase = "Failed"
+	phasePending     v1.RestorePhase = "Pending"
+	phaseScalingDown v1.RestorePhase = "ScalingDown"
+	phaseRunning     v1.RestorePhase = "Running"
+	phaseScalingUp   v1.RestorePhase = "ScalingUp"
+	phaseSucceeded   v1.RestorePhase = "Succeeded"
+	phaseFailed      v1.RestorePhase = "Failed"
 
 	scaleDownPoll    = 5 * time.Second
 	scaleDownTimeout = 5 * time.Minute
 	queuePoll        = 10 * time.Second
 
 	// finalizerName makes deleting a Restore mid-flight put the workloads it scaled down back first.
-	finalizerName = "backshots.io/restore"
+	finalizerName = "heirloom.io/restore"
 	// maxRestoreNameLen keeps "bs-restore-<name>" (the Job name, and so its pods' job-name label) under 63 characters.
 	maxRestoreNameLen = 40
 )
@@ -61,7 +61,7 @@ type RestoreReconciler struct {
 func (r *RestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("restore").
-		For(&v1alpha1.Restore{}).
+		For(&v1.Restore{}).
 		Owns(&batchv1.Job{}).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(r.restoresOfMover)).
 		Complete(r)
@@ -75,7 +75,7 @@ func (r *RestoreReconciler) restoresOfMover(ctx context.Context, obj client.Obje
 	if policy == "" || l[jobcfg.LabelRole] == string(jobcfg.ModeRestore) {
 		return nil
 	}
-	var list v1alpha1.RestoreList
+	var list v1.RestoreList
 	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -98,7 +98,7 @@ func (r *RestoreReconciler) now() metav1.Time {
 }
 
 func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var rs v1alpha1.Restore
+	var rs v1.Restore
 	if err := r.Get(ctx, req.NamespacedName, &rs); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -130,7 +130,7 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return res, nil
 }
 
-func (r *RestoreReconciler) step(ctx context.Context, rs *v1alpha1.Restore) (ctrl.Result, error) {
+func (r *RestoreReconciler) step(ctx context.Context, rs *v1.Restore) (ctrl.Result, error) {
 	switch rs.Status.Phase {
 	case "":
 		start := r.now()
@@ -150,7 +150,7 @@ func (r *RestoreReconciler) step(ctx context.Context, rs *v1alpha1.Restore) (ctr
 }
 
 // finalize runs when a Restore is deleted: workloads it scaled down are put back before it goes away.
-func (r *RestoreReconciler) finalize(ctx context.Context, rs *v1alpha1.Restore) error {
+func (r *RestoreReconciler) finalize(ctx context.Context, rs *v1.Restore) error {
 	if !controllerutil.ContainsFinalizer(rs, finalizerName) {
 		return nil
 	}
@@ -169,7 +169,7 @@ func (r *RestoreReconciler) finalize(ctx context.Context, rs *v1alpha1.Restore) 
 
 // failBeforeRestore ends a Restore whose Job never ran. The data is untouched, so workloads and
 // autoscalers always come back.
-func (r *RestoreReconciler) failBeforeRestore(rs *v1alpha1.Restore, msg string) {
+func (r *RestoreReconciler) failBeforeRestore(rs *v1.Restore, msg string) {
 	rs.Status.Message = msg
 	if len(rs.Status.Scaled) > 0 || len(rs.Status.ScaledHPAs) > 0 {
 		rs.Status.Phase = phaseScalingUp
@@ -180,7 +180,7 @@ func (r *RestoreReconciler) failBeforeRestore(rs *v1alpha1.Restore, msg string) 
 
 // fail records the reason and either brings workloads back first (scaleUpOnFailure) or ends the Restore.
 // It is for failures of the restore itself; the workloads stay down by default because the data may be half written.
-func (r *RestoreReconciler) fail(rs *v1alpha1.Restore, msg string) {
+func (r *RestoreReconciler) fail(rs *v1.Restore, msg string) {
 	rs.Status.Message = msg
 	if rs.Spec.ScaleUpOnFailure && len(rs.Status.Scaled) > 0 {
 		rs.Status.Phase = phaseScalingUp
@@ -189,25 +189,25 @@ func (r *RestoreReconciler) fail(rs *v1alpha1.Restore, msg string) {
 	r.finish(rs, phaseFailed)
 }
 
-func (r *RestoreReconciler) finish(rs *v1alpha1.Restore, phase v1alpha1.RestorePhase) {
+func (r *RestoreReconciler) finish(rs *v1.Restore, phase v1.RestorePhase) {
 	done := r.now()
 	rs.Status.Phase = phase
 	rs.Status.CompletionTime = &done
 }
 
-func (r *RestoreReconciler) load(ctx context.Context, rs *v1alpha1.Restore) (*v1alpha1.BackupPolicy, *v1alpha1.BackupStore, error) {
-	var p v1alpha1.BackupPolicy
+func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore) (*v1.BackupPolicy, *v1.BackupStore, error) {
+	var p v1.BackupPolicy
 	if err := r.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: rs.Spec.PolicyRef}, &p); err != nil {
 		return nil, nil, fmt.Errorf("BackupPolicy %q: %w", rs.Spec.PolicyRef, err)
 	}
-	var store v1alpha1.BackupStore
+	var store v1.BackupStore
 	if err := r.Get(ctx, types.NamespacedName{Name: p.Spec.StoreRef}, &store); err != nil {
 		return nil, nil, fmt.Errorf("BackupStore %q: %w", p.Spec.StoreRef, err)
 	}
 	return &p, &store, nil
 }
 
-func (r *RestoreReconciler) pending(ctx context.Context, rs *v1alpha1.Restore) (ctrl.Result, error) {
+func (r *RestoreReconciler) pending(ctx context.Context, rs *v1.Restore) (ctrl.Result, error) {
 	p, _, err := r.load(ctx, rs)
 	if apierrors.IsNotFound(err) {
 		r.failBeforeRestore(rs, err.Error())
@@ -254,13 +254,13 @@ func (r *RestoreReconciler) pending(ctx context.Context, rs *v1alpha1.Restore) (
 }
 
 // missingClaim returns the name of the PVC the restore would write to if it does not exist.
-func (r *RestoreReconciler) missingClaim(ctx context.Context, rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) (string, error) {
+func (r *RestoreReconciler) missingClaim(ctx context.Context, rs *v1.Restore, p *v1.BackupPolicy) (string, error) {
 	claim := rs.Spec.TargetPVC
 	if claim == "" {
 		switch p.Spec.Source.Type {
-		case v1alpha1.SourceFiles:
+		case v1.SourceFiles:
 			claim = p.Spec.Source.Files.PVC
-		case v1alpha1.SourceSQLite:
+		case v1.SourceSQLite:
 			claim = p.Spec.Source.SQLite.PVC
 		}
 	}
@@ -277,8 +277,8 @@ func (r *RestoreReconciler) missingClaim(ctx context.Context, rs *v1alpha1.Resto
 
 // blockedBy returns the Restore of the same policy this one has to wait for, or "". Restores of one policy run
 // one at a time, oldest first, so two of them never scale each other's workloads up under a running mover.
-func (r *RestoreReconciler) blockedBy(ctx context.Context, rs *v1alpha1.Restore) (string, error) {
-	var list v1alpha1.RestoreList
+func (r *RestoreReconciler) blockedBy(ctx context.Context, rs *v1.Restore) (string, error) {
+	var list v1.RestoreList
 	if err := r.List(ctx, &list, client.InNamespace(rs.Namespace)); err != nil {
 		return "", err
 	}
@@ -303,7 +303,7 @@ func (r *RestoreReconciler) blockedBy(ctx context.Context, rs *v1alpha1.Restore)
 
 // activeMover returns the name of a running backup or verify Job of the policy, or "". A Restore and
 // those runs must never share the restic repository at the same time (see pending).
-func (r *RestoreReconciler) activeMover(ctx context.Context, rs *v1alpha1.Restore) (string, error) {
+func (r *RestoreReconciler) activeMover(ctx context.Context, rs *v1.Restore) (string, error) {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs, client.InNamespace(rs.Namespace), client.MatchingLabels{jobcfg.LabelPolicy: rs.Spec.PolicyRef}); err != nil {
 		return "", err
@@ -321,7 +321,7 @@ func (r *RestoreReconciler) activeMover(ctx context.Context, rs *v1alpha1.Restor
 }
 
 // validateRestore checks that the restore options make sense for the policy's source type.
-func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
+func validateRestore(rs *v1.Restore, p *v1.BackupPolicy) error {
 	if err := validateSource(p.Spec.Source); err != nil {
 		return fmt.Errorf("policy %q: %v", p.Name, err)
 	}
@@ -341,19 +341,19 @@ func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 		return fmt.Errorf("restores support delete or paths, not both (excluded paths cannot be protected while restricting includes)")
 	}
 	switch p.Spec.Source.Type {
-	case v1alpha1.SourceFiles:
+	case v1.SourceFiles:
 		if len(s.Databases) > 0 {
 			return fmt.Errorf("databases is only valid for postgres sources")
 		}
-	case v1alpha1.SourceSQLite:
+	case v1.SourceSQLite:
 		if len(s.Databases) > 0 || len(s.Paths) > 0 || s.Delete {
 			return fmt.Errorf("paths, databases and delete are not valid for sqlite sources")
 		}
-	case v1alpha1.SourcePostgres:
+	case v1.SourcePostgres:
 		if len(s.Paths) > 0 || s.Delete || s.TargetPVC != "" {
 			return fmt.Errorf("paths, delete and targetPVC are not valid for postgres sources")
 		}
-	case v1alpha1.SourceCommand:
+	case v1.SourceCommand:
 		if len(s.Databases) > 0 || s.Delete {
 			return fmt.Errorf("databases and delete are not valid for command sources")
 		}
@@ -368,7 +368,7 @@ func validateRestore(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy) error {
 
 // validateRestoreInputs rejects values the mover would only reject after the workloads were already stopped.
 // (from is checked in validateRestore, next to the other policy-dependent rules.)
-func validateRestoreInputs(rs *v1alpha1.Restore) error {
+func validateRestoreInputs(rs *v1.Restore) error {
 	if len(rs.Name) > maxRestoreNameLen {
 		return fmt.Errorf("restore name is longer than %d characters", maxRestoreNameLen)
 	}
@@ -391,7 +391,7 @@ func validateRestoreInputs(rs *v1alpha1.Restore) error {
 	return nil
 }
 
-func (r *RestoreReconciler) scalingDown(ctx context.Context, rs *v1alpha1.Restore) (ctrl.Result, error) {
+func (r *RestoreReconciler) scalingDown(ctx context.Context, rs *v1.Restore) (ctrl.Result, error) {
 	refs := rs.Spec.ScaleDown
 	// Persist original replica counts before touching anything so a crash cannot lose them.
 	if recorded, err := r.recordReplicas(ctx, rs); err != nil || recorded {
@@ -426,7 +426,7 @@ func (r *RestoreReconciler) scalingDown(ctx context.Context, rs *v1alpha1.Restor
 }
 
 // recordReplicas appends running workloads to status.scaled; it reports whether it changed anything.
-func (r *RestoreReconciler) recordReplicas(ctx context.Context, rs *v1alpha1.Restore) (bool, error) {
+func (r *RestoreReconciler) recordReplicas(ctx context.Context, rs *v1.Restore) (bool, error) {
 	recorded := false
 	for _, ref := range rs.Spec.ScaleDown {
 		if isScaled(rs, ref) {
@@ -441,7 +441,7 @@ func (r *RestoreReconciler) recordReplicas(ctx context.Context, rs *v1alpha1.Res
 			return false, err
 		}
 		if n := w.replicas(); n > 0 {
-			rs.Status.Scaled = append(rs.Status.Scaled, v1alpha1.ScaledWorkload{WorkloadRef: ref, Replicas: n})
+			rs.Status.Scaled = append(rs.Status.Scaled, v1.ScaledWorkload{WorkloadRef: ref, Replicas: n})
 			recorded = true
 		}
 	}
@@ -452,7 +452,7 @@ func (r *RestoreReconciler) recordReplicas(ctx context.Context, rs *v1alpha1.Res
 }
 
 // isScaled reports whether ref's replica count is already recorded.
-func isScaled(rs *v1alpha1.Restore, ref v1alpha1.WorkloadRef) bool {
+func isScaled(rs *v1.Restore, ref v1.WorkloadRef) bool {
 	for _, sc := range rs.Status.Scaled {
 		if sc.WorkloadRef == ref {
 			return true
@@ -462,7 +462,7 @@ func isScaled(rs *v1alpha1.Restore, ref v1alpha1.WorkloadRef) bool {
 }
 
 // isHPAPaused reports whether the autoscaler's bounds were already recorded for this restore.
-func isHPAPaused(rs *v1alpha1.Restore, name string) bool {
+func isHPAPaused(rs *v1.Restore, name string) bool {
 	for _, h := range rs.Status.ScaledHPAs {
 		if h.Name == name {
 			return true
@@ -477,7 +477,7 @@ func isHPAPaused(rs *v1alpha1.Restore, name string) bool {
 // of 0 (before 1.30) the autoscaler is left running with a recorded warning instead of failing the
 // restore — the pre-quiesce behaviour, and better than an outage. It reports whether the caller
 // should requeue so status lands first.
-func (r *RestoreReconciler) quiesceHPAs(ctx context.Context, rs *v1alpha1.Restore) (bool, error) {
+func (r *RestoreReconciler) quiesceHPAs(ctx context.Context, rs *v1.Restore) (bool, error) {
 	var list autoscalingv2.HorizontalPodAutoscalerList
 	if err := r.Reader.List(ctx, &list, client.InNamespace(rs.Namespace)); err != nil {
 		return false, err
@@ -495,7 +495,7 @@ func (r *RestoreReconciler) quiesceHPAs(ctx context.Context, rs *v1alpha1.Restor
 			if h.Spec.MinReplicas != nil {
 				min = *h.Spec.MinReplicas
 			}
-			rs.Status.ScaledHPAs = append(rs.Status.ScaledHPAs, v1alpha1.ScaledHPA{Name: h.Name, MinReplicas: min, MaxReplicas: h.Spec.MaxReplicas})
+			rs.Status.ScaledHPAs = append(rs.Status.ScaledHPAs, v1.ScaledHPA{Name: h.Name, MinReplicas: min, MaxReplicas: h.Spec.MaxReplicas})
 			return true, nil // persist the record before touching the autoscaler
 		}
 	}
@@ -529,7 +529,7 @@ func (r *RestoreReconciler) quiesceHPAs(ctx context.Context, rs *v1alpha1.Restor
 }
 
 // restoreHPAs puts every recorded autoscaler's bounds back.
-func (r *RestoreReconciler) restoreHPAs(ctx context.Context, rs *v1alpha1.Restore) error {
+func (r *RestoreReconciler) restoreHPAs(ctx context.Context, rs *v1.Restore) error {
 	for _, rec := range rs.Status.ScaledHPAs {
 		var h autoscalingv2.HorizontalPodAutoscaler
 		if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: rec.Name}, &h); err != nil {
@@ -552,7 +552,7 @@ func (r *RestoreReconciler) restoreHPAs(ctx context.Context, rs *v1alpha1.Restor
 }
 
 // updateWorkload applies mutate to the workload and patches it when mutate reports a change.
-func (r *RestoreReconciler) updateWorkload(ctx context.Context, namespace string, ref v1alpha1.WorkloadRef, mutate func(workload) bool) error {
+func (r *RestoreReconciler) updateWorkload(ctx context.Context, namespace string, ref v1.WorkloadRef, mutate func(workload) bool) error {
 	w, err := getWorkload(ctx, r.Reader, namespace, ref)
 	if err != nil {
 		return client.IgnoreNotFound(err)
@@ -566,7 +566,7 @@ func (r *RestoreReconciler) updateWorkload(ctx context.Context, namespace string
 	return r.Patch(ctx, w.Object, client.MergeFrom(original)) //nolint:staticcheck // w.Object is the registered concrete type, not the wrapper w
 }
 
-func (r *RestoreReconciler) running(ctx context.Context, rs *v1alpha1.Restore) error {
+func (r *RestoreReconciler) running(ctx context.Context, rs *v1.Restore) error {
 	var job batchv1.Job
 	err := r.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: restoreJobName(rs.Name)}, &job)
 	if apierrors.IsNotFound(err) {
@@ -598,7 +598,7 @@ func (r *RestoreReconciler) running(ctx context.Context, rs *v1alpha1.Restore) e
 	return nil
 }
 
-func (r *RestoreReconciler) createJob(ctx context.Context, rs *v1alpha1.Restore) error {
+func (r *RestoreReconciler) createJob(ctx context.Context, rs *v1.Restore) error {
 	p, store, err := r.load(ctx, rs)
 	if err != nil {
 		return err
@@ -621,7 +621,7 @@ func (r *RestoreReconciler) createJob(ctx context.Context, rs *v1alpha1.Restore)
 	return nil
 }
 
-func (r *RestoreReconciler) restoreJob(rs *v1alpha1.Restore, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore) (*batchv1.Job, error) {
+func (r *RestoreReconciler) restoreJob(rs *v1.Restore, p *v1.BackupPolicy, store *v1.BackupStore) (*batchv1.Job, error) {
 	from := rs.Spec.From
 	if from == "" {
 		from = "latest"
@@ -654,7 +654,7 @@ func (r *RestoreReconciler) restoreJob(rs *v1alpha1.Restore, p *v1alpha1.BackupP
 
 // scalingUp puts workloads and autoscalers back, then ends the Restore: Succeeded only if the
 // restore Job succeeded.
-func (r *RestoreReconciler) scalingUp(ctx context.Context, rs *v1alpha1.Restore) error {
+func (r *RestoreReconciler) scalingUp(ctx context.Context, rs *v1.Restore) error {
 	if err := r.restoreHPAs(ctx, rs); err != nil {
 		return err
 	}

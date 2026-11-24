@@ -28,7 +28,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: backshots version and Kubernetes version
+      label: heirloom version and Kubernetes version
       placeholder: "0.1.0, k3s v1.35"
     validations:
       required: true

@@ -19,12 +19,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
-	"github.com/willuhmjs/backshots/internal/jobcfg"
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/api/v1"
+	"github.com/willuhmjs/heirloom/internal/jobcfg"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
-func policyDue(p *v1alpha1.BackupPolicy) *v1alpha1.BackupPolicy {
+func policyDue(p *v1.BackupPolicy) *v1.BackupPolicy {
 	p.CreationTimestamp = metav1.NewTime(testNow.Add(-2 * time.Hour)) // the 09:00 slot has passed
 	return p
 }
@@ -87,11 +87,11 @@ func TestScheduledBackupJob(t *testing.T) {
 		t.Errorf("restartPolicy = %s", pod.RestartPolicy)
 	}
 	init := pod.InitContainers[0]
-	if init.Name != "install" || init.Image != testImage || strings.Join(init.Command, " ") != "/backshots install /tools/backshots" {
+	if init.Name != "install" || init.Image != testImage || strings.Join(init.Command, " ") != "/heirloom install /tools/heirloom" {
 		t.Errorf("init = %+v", init)
 	}
 	mover := pod.Containers[0]
-	if mover.Name != "mover" || mover.Image != testImage || strings.Join(mover.Command, " ") != "/tools/backshots run" {
+	if mover.Name != "mover" || mover.Image != testImage || strings.Join(mover.Command, " ") != "/tools/heirloom run" {
 		t.Errorf("mover = %+v", mover)
 	}
 	sc := mover.SecurityContext
@@ -125,7 +125,7 @@ func TestScheduledBackupJob(t *testing.T) {
 func TestRenderSourceTypes(t *testing.T) {
 	tests := []struct {
 		name         string
-		policy       *v1alpha1.BackupPolicy
+		policy       *v1.BackupPolicy
 		image        string
 		claim        string
 		sourceRO     bool
@@ -176,7 +176,7 @@ func TestRenderSourceTypes(t *testing.T) {
 
 func TestPodOptionsPropagate(t *testing.T) {
 	p := filesPolicy()
-	p.Spec.Pod = v1alpha1.PodOptions{
+	p.Spec.Pod = v1.PodOptions{
 		NodeSelector:      map[string]string{"disk": "fast"},
 		Tolerations:       []corev1.Toleration{{Key: "k", Operator: corev1.TolerationOpExists}},
 		PriorityClassName: "low",
@@ -192,9 +192,9 @@ func TestPodOptionsPropagate(t *testing.T) {
 }
 
 func TestRetentionResolutionOrder(t *testing.T) {
-	policyRet := &v1alpha1.Retention{Daily: 5}
-	storeRet := &v1alpha1.Retention{Weekly: 7}
-	store := func(r *v1alpha1.Retention) *v1alpha1.BackupStore {
+	policyRet := &v1.Retention{Daily: 5}
+	storeRet := &v1.Retention{Weekly: 7}
+	store := func(r *v1.Retention) *v1.BackupStore {
 		s := testStore()
 		s.Spec.Retention = r
 		return s
@@ -212,7 +212,7 @@ func TestRetentionResolutionOrder(t *testing.T) {
 
 func TestRetentionInConfig(t *testing.T) {
 	s := testStore()
-	s.Spec.Retention = &v1alpha1.Retention{Monthly: 3}
+	s.Spec.Retention = &v1.Retention{Monthly: 3}
 	c := newFake(t, s, policyDue(filesPolicy()))
 	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
 	env := onlyJob(t, c, jobcfg.ModeBackup).Spec.Template.Spec.Containers[0].Env[0].Value
@@ -223,7 +223,7 @@ func TestRetentionInConfig(t *testing.T) {
 
 func TestVerifyJobScheduling(t *testing.T) {
 	p := policyDue(postgresPolicy())
-	p.Spec.Verify = &v1alpha1.Verify{Schedule: "30 * * * *", Database: "app"} // the 08:30 slot has passed
+	p.Spec.Verify = &v1.Verify{Schedule: "30 * * * *", Database: "app"} // the 08:30 slot has passed
 	p.Spec.Pod.ScratchStorageClassName = ptr.To("fast")
 	c := newFake(t, testStore(), p)
 	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
@@ -242,7 +242,7 @@ func TestVerifyJobScheduling(t *testing.T) {
 		mount(pod.Containers[0], "scratch").MountPath != "/scratch" {
 		t.Errorf("scratch volume = %+v", scratch)
 	}
-	var cur v1alpha1.BackupPolicy
+	var cur v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &cur)
 	if cur.Status.LastVerifyScheduleTime == nil {
 		t.Error("lastVerifyScheduleTime not recorded")
@@ -251,7 +251,7 @@ func TestVerifyJobScheduling(t *testing.T) {
 	// Without a storage class scratch is an emptyDir; without verify no verify Job is ever created.
 	q := policyDue(postgresPolicy())
 	q.Name = "plain"
-	q.Spec.Verify = &v1alpha1.Verify{Schedule: "30 * * * *"}
+	q.Spec.Verify = &v1.Verify{Schedule: "30 * * * *"}
 	n := policyDue(postgresPolicy())
 	n.Name = "noverify"
 	c2 := newFake(t, testStore(), q, n)
@@ -270,7 +270,7 @@ func TestSchedulingStartsOneRunPerSlot(t *testing.T) {
 	reconcileKey(t, r, "apps", "app")
 	onlyJob(t, c, jobcfg.ModeBackup) // the second reconcile must not add another
 
-	var p v1alpha1.BackupPolicy
+	var p v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &p)
 	if p.Status.LastScheduleTime == nil || !p.Status.LastScheduleTime.Time.Equal(testNow.Truncate(time.Second)) {
 		t.Errorf("lastScheduleTime = %v", p.Status.LastScheduleTime)
@@ -315,7 +315,7 @@ func TestSuspendedPolicyStartsNothing(t *testing.T) {
 	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 0 {
 		t.Fatalf("jobs = %d for a suspended policy", n)
 	}
-	var got v1alpha1.BackupPolicy
+	var got v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &got)
 	if got.Status.NextSyncTime != nil {
 		t.Error("suspended policy has no next sync")
@@ -327,14 +327,14 @@ func TestSuspendedPolicyStartsNothing(t *testing.T) {
 
 // A backup that fires while a restore is rewriting the volume would snapshot a half-restored tree.
 func TestRestorePausesScheduling(t *testing.T) {
-	rs := &v1alpha1.Restore{ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "apps"}, Spec: v1alpha1.RestoreSpec{PolicyRef: "app"}}
+	rs := &v1.Restore{ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "apps"}, Spec: v1.RestoreSpec{PolicyRef: "app"}}
 	c := newFake(t, testStore(), policyDue(filesPolicy()), rs)
 	r := newPolicyReconciler(c)
 	reconcileKey(t, r, "apps", "app")
 	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 0 {
 		t.Fatalf("jobs = %d while a restore is active", n)
 	}
-	var got v1alpha1.BackupPolicy
+	var got v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &got)
 	if cond := meta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != "RestoreInProgress" {
 		t.Errorf("ready = %+v", cond)
@@ -358,7 +358,7 @@ func TestManualTriggerCreatesExactlyOneJob(t *testing.T) {
 	reconcileKey(t, r, "apps", "app")
 
 	job := *onlyJob(t, c, jobcfg.ModeBackup)
-	if job.Name != manualJobName("app", "now-1", 0) || job.Annotations["backshots.io/manual"] != "now-1" ||
+	if job.Name != manualJobName("app", "now-1", 0) || job.Annotations["heirloom.io/manual"] != "now-1" ||
 		metav1.GetControllerOf(&job).Name != "app" {
 		t.Errorf("manual job = %+v", job.ObjectMeta)
 	}
@@ -373,7 +373,7 @@ func TestManualTriggerCreatesExactlyOneJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcileKey(t, r, "apps", "app")
-	var cur v1alpha1.BackupPolicy
+	var cur v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &cur)
 	if cur.Status.LastManualSync != "now-1" {
 		t.Errorf("lastManualSync = %q", cur.Status.LastManualSync)
@@ -433,7 +433,7 @@ func TestStoreNotFoundAndInvalidSpec(t *testing.T) {
 	c := newFake(t, filesPolicy())
 	r := newPolicyReconciler(c)
 	reconcileKey(t, r, "apps", "app")
-	var p v1alpha1.BackupPolicy
+	var p v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &p)
 	if cond := meta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "StoreNotFound" {
 		t.Errorf("ready = %+v", cond)
@@ -454,7 +454,7 @@ func TestStoreNotFoundAndInvalidSpec(t *testing.T) {
 
 func TestStatusFromJobs(t *testing.T) {
 	p := filesPolicy()
-	p.Spec.Verify = &v1alpha1.Verify{Schedule: "0 4 * * *"}
+	p.Spec.Verify = &v1.Verify{Schedule: "0 4 * * *"}
 	okAt := testNow.Add(-2 * time.Hour)
 	failAt := testNow.Add(-time.Hour)
 	okJob, okPod := finishedJob("bs-app-1", "app", jobcfg.ModeBackup, true, okAt, &jobcfg.Result{
@@ -469,7 +469,7 @@ func TestStatusFromJobs(t *testing.T) {
 	c := newFake(t, testStore(), p, okJob, okPod, failJob, failPod, verJob, verPod)
 	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
 
-	var got v1alpha1.BackupPolicy
+	var got v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &got)
 	st := got.Status
 	if st.LastSnapshot == nil || st.LastSnapshot.Name != "2026-11-22T08-00-00Z" || st.LastSnapshot.Bytes != 1000 || st.LastSnapshot.Files != 7 {
@@ -503,13 +503,13 @@ func TestStatusUnknownBeforeFirstRunAndStable(t *testing.T) {
 	c := newFake(t, testStore(), filesPolicy())
 	r := newPolicyReconciler(c)
 	reconcileKey(t, r, "apps", "app")
-	var first v1alpha1.BackupPolicy
+	var first v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &first)
 	if h := meta.FindStatusCondition(first.Status.Conditions, "Healthy"); h == nil || h.Status != metav1.ConditionUnknown {
 		t.Errorf("healthy = %+v", h)
 	}
 	reconcileKey(t, r, "apps", "app")
-	var second v1alpha1.BackupPolicy
+	var second v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &second)
 	if first.ResourceVersion != second.ResourceVersion {
 		t.Error("unchanged status must not be rewritten")
@@ -520,7 +520,7 @@ func TestFailedJobWithoutTerminationMessage(t *testing.T) {
 	job, _ := finishedJob("bs-app-1", "app", jobcfg.ModeBackup, false, testNow, nil)
 	c := newFake(t, testStore(), filesPolicy(), job)
 	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
-	var got v1alpha1.BackupPolicy
+	var got v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &got)
 	if h := meta.FindStatusCondition(got.Status.Conditions, "Healthy"); h == nil || h.Status != metav1.ConditionFalse || h.Message != "Done: job message" {
 		t.Errorf("healthy = %+v", h)
@@ -529,7 +529,7 @@ func TestFailedJobWithoutTerminationMessage(t *testing.T) {
 
 func TestVerifyNeedsDatabaseWhenAmbiguous(t *testing.T) {
 	p := postgresPolicy()
-	p.Spec.Verify = &v1alpha1.Verify{Schedule: "@daily", SQL: []string{"select true"}}
+	p.Spec.Verify = &v1.Verify{Schedule: "@daily", SQL: []string{"select true"}}
 	if err := validatePolicy(p); err == nil {
 		t.Error("verify.sql with no database list and no verify.database must be rejected")
 	}
@@ -546,7 +546,7 @@ func TestVerifyNeedsDatabaseWhenAmbiguous(t *testing.T) {
 
 func TestStaleness(t *testing.T) {
 	last := time.Date(2026, 1, 1, 10, 30, 0, 0, time.UTC)
-	mk := func() *v1alpha1.BackupPolicy {
+	mk := func() *v1.BackupPolicy {
 		p := filesPolicy()
 		p.Spec.Schedule = "@hourly" // due 11:00, grace a quarter hour
 		p.Status.LastSyncTime = metaTime(last)
@@ -554,7 +554,7 @@ func TestStaleness(t *testing.T) {
 			Type: condHealthy, Status: metav1.ConditionTrue, Reason: "BackupSucceeded", Message: "latest backup succeeded"})
 		return p
 	}
-	healthy := func(p *v1alpha1.BackupPolicy) *metav1.Condition {
+	healthy := func(p *v1.BackupPolicy) *metav1.Condition {
 		return meta.FindStatusCondition(p.Status.Conditions, condHealthy)
 	}
 
@@ -665,7 +665,7 @@ func TestManualTriggerValueCanBeReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcileKey(t, r, "apps", "app")
-	var cur v1alpha1.BackupPolicy
+	var cur v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &cur)
 	if cur.Status.LastManualSync != "go" {
 		t.Fatalf("lastManualSync = %q", cur.Status.LastManualSync)
@@ -729,7 +729,7 @@ func TestHealthGaugeExistsForAPolicyThatNeverSucceeded(t *testing.T) {
 	p.Namespace, p.Name = "gauge-ns", "never"
 	recordMetrics(p) // no Healthy condition yet: Unknown, so no series
 	count := func() int {
-		n, err := testutil.GatherAndCount(metrics.Registry, "backshots_policy_healthy")
+		n, err := testutil.GatherAndCount(metrics.Registry, "heirloom_policy_healthy")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -739,7 +739,7 @@ func TestHealthGaugeExistsForAPolicyThatNeverSucceeded(t *testing.T) {
 	meta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{Type: condHealthy, Status: metav1.ConditionFalse, Reason: "Stale", Message: "never ran"})
 	recordMetrics(p) // stale and never succeeded: no last_success series, but the health series must exist
 	if count() != before+1 {
-		t.Error("backshots_policy_healthy must exist for an unhealthy policy that has never succeeded")
+		t.Error("heirloom_policy_healthy must exist for an unhealthy policy that has never succeeded")
 	}
 	forgetMetrics("gauge-ns", "never")
 }
@@ -795,7 +795,7 @@ func TestHealthEventsOnTransitionsOnly(t *testing.T) {
 }
 
 func TestRestoreEmitsPhaseEvents(t *testing.T) {
-	c := newFake(t, testStore(), filesPolicy(), testRestore(func(r *v1alpha1.Restore) { r.Spec.ScaleDown = nil }))
+	c := newFake(t, testStore(), filesPolicy(), testRestore(func(r *v1.Restore) { r.Spec.ScaleDown = nil }))
 	r := newRestoreReconciler(c)
 	rec := events.NewFakeRecorder(20)
 	r.Recorder = rec
@@ -843,9 +843,9 @@ func TestBackupAndVerifyExcludeEachOther(t *testing.T) {
 	activeBackup := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "bs-app-run-1", Namespace: "apps", Labels: jobLabels("app", jobcfg.ModeBackup)}}
 	activeVerify := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "bs-verify-app-1", Namespace: "apps", Labels: jobLabels("app", jobcfg.ModeVerify)}}
 
-	duePolicy := func() *v1alpha1.BackupPolicy {
+	duePolicy := func() *v1.BackupPolicy {
 		p := policyDue(filesPolicy())
-		p.Spec.Verify = &v1alpha1.Verify{Schedule: "30 * * * *"} // the same slot is due for both roles
+		p.Spec.Verify = &v1.Verify{Schedule: "30 * * * *"} // the same slot is due for both roles
 		return p
 	}
 
@@ -860,7 +860,7 @@ func TestBackupAndVerifyExcludeEachOther(t *testing.T) {
 	if n := len(jobsOf(t, c, jobcfg.ModeBackup)); n != 0 {
 		t.Errorf("backup started while a verify runs: %d jobs", n)
 	}
-	var p v1alpha1.BackupPolicy
+	var p v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &p)
 	if p.Status.LastScheduleTime != nil {
 		t.Error("a blocked slot must not be recorded as run")
@@ -888,7 +888,7 @@ func TestHealthyMessageCarriesRunSummary(t *testing.T) {
 		&jobcfg.Result{Mode: jobcfg.ModeBackup, OK: true, Snapshot: "abc12345", Message: msg, Time: testNow.Add(-time.Hour)})
 	c := newFake(t, testStore(), filesPolicy(), okJob, okPod)
 	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
-	var got v1alpha1.BackupPolicy
+	var got v1.BackupPolicy
 	mustGet(t, c, "apps", "app", &got)
 	if h := meta.FindStatusCondition(got.Status.Conditions, condHealthy); h == nil || h.Status != metav1.ConditionTrue || h.Message != msg {
 		t.Errorf("healthy = %+v", h)

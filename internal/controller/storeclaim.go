@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/willuhmjs/backshots/api/v1alpha1"
+	"github.com/willuhmjs/heirloom/api/v1"
 )
 
 // A pod's inline NFS volume cannot carry mount options — only a PersistentVolume can — so a store
@@ -29,14 +29,14 @@ const storeClaimSize = "1Gi" // NFS ignores capacity; kubelet only checks PVC re
 // storeClaimName is the deterministic name of the PV/PVC pair one store's mount options get in one
 // namespace. Every policy in the namespace shares it, so the export is mounted once per node.
 func storeClaimName(namespace, store string) string {
-	return "backshots-store-" + shortHash(namespace+"/"+store)
+	return "heirloom-store-" + shortHash(namespace+"/"+store)
 }
 
 // ensureStoreClaim provisions the PV+PVC pair for a store with mountOptions, and adds p as one of
 // the claim's owners. When no mountOptions are set it is a no-op: movers then mount the export
 // inline, exactly as before. It reports whether the pair is ready to mount, plus a message for why
 // it is not.
-func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, p *v1alpha1.BackupPolicy, store *v1alpha1.BackupStore) (bool, string, error) {
+func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, p *v1.BackupPolicy, store *v1.BackupStore) (bool, string, error) {
 	opts := store.Spec.NFS.MountOptions
 	if len(opts) == 0 {
 		return true, "", nil
@@ -62,7 +62,7 @@ func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader
 	err := reader.Get(ctx, types.NamespacedName{Name: name}, &pv)
 	if apierrors.IsNotFound(err) {
 		want := &corev1.PersistentVolume{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"backshots.io/store": labelValue(store.Name)}},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"heirloom.io/store": labelValue(store.Name)}},
 			Spec: corev1.PersistentVolumeSpec{
 				Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(storeClaimSize)},
 				AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
@@ -100,7 +100,7 @@ func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader
 // policies in one namespace can co-own a shared object; garbage collection then happens exactly
 // when the last of them is deleted. Reads go through the uncached reader to keep these types out of
 // the manager's cache.
-func createOrAddOwner(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, p *v1alpha1.BackupPolicy, obj, protoType client.Object) error {
+func createOrAddOwner(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, p *v1.BackupPolicy, obj, protoType client.Object) error {
 	err := reader.Get(ctx, client.ObjectKeyFromObject(obj), protoType)
 	if apierrors.IsNotFound(err) {
 		if err := controllerutil.SetOwnerReference(p, obj, scheme); err != nil {

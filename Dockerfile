@@ -9,10 +9,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /backshots ./cmd
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /heirloom ./cmd
 # restic is built from source (pinned tag, verified via the checksum database) rather than taken from apk:
 # the package is linked against musl, and a postgres mover runs inside the user's postgres image with only
-# these binaries copied in via `backshots install` — it has to be a static binary to run there.
+# these binaries copied in via `heirloom install` — it has to be a static binary to run there.
 RUN cd /tmp && GOPATH=/restic GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go install github.com/restic/restic/cmd/restic@v0.18.1 && test -f /restic/bin/restic || mv /restic/bin/${TARGETOS}_${TARGETARCH}/restic /restic/bin/restic
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
@@ -23,9 +23,9 @@ COPY --from=build /restic/bin/restic /usr/bin/restic
 # The runner passes --insecure-no-password to every restic command (needs restic >= 0.17), so fail the build
 # here rather than every restic backup run at once. Also proves the binary is functional, not just installed.
 RUN restic version && restic --insecure-no-password --repo /tmp/restic-probe init && rm -rf /tmp/restic-probe
-COPY --from=build /backshots /backshots
+COPY --from=build /heirloom /heirloom
 # The image runs as root on purpose. Mover pods must preserve file ownership (chown) and read
 # arbitrary PVC contents, which needs root. The manager Deployment does not need that: the chart
 # runs it as uid 65532 with a read-only root filesystem and no capabilities.
-ENTRYPOINT ["/backshots"]
+ENTRYPOINT ["/heirloom"]
 CMD ["manager"]

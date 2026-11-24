@@ -2,15 +2,15 @@
 {{- /*
 Helm installs crds/ on first install and never upgrades them. These hooks close that gap: before
 every install or upgrade, a Job running the operator's own image applies the CRD manifests embedded
-in it (backshots install-crds). A failed hook fails the release, so schema drift cannot slip past.
+in it (heirloom install-crds). A failed hook fails the release, so schema drift cannot slip past.
 */ -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "backshots.fullname" . }}-crd-hook
+  name: {{ include "heirloom.fullname" . }}-crd-hook
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
@@ -19,9 +19,9 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "backshots.fullname" . }}-crd-hook
+  name: {{ include "heirloom.fullname" . }}-crd-hook
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
@@ -34,9 +34,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "backshots.fullname" . }}-crd-hook
+  name: {{ include "heirloom.fullname" . }}-crd-hook
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
@@ -44,19 +44,19 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "backshots.fullname" . }}-crd-hook
+  name: {{ include "heirloom.fullname" . }}-crd-hook
 subjects:
   - kind: ServiceAccount
-    name: {{ include "backshots.fullname" . }}-crd-hook
+    name: {{ include "heirloom.fullname" . }}-crd-hook
     namespace: {{ .Release.Namespace }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "backshots.fullname" . }}-crd-hook
+  name: {{ include "heirloom.fullname" . }}-crd-hook
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "backshots.labels" . | nindent 4 }}
+    {{- include "heirloom.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-4"
@@ -67,10 +67,10 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "backshots.selectorLabels" . | nindent 8 }}
+        {{- include "heirloom.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Never
-      serviceAccountName: {{ include "backshots.fullname" . }}-crd-hook
+      serviceAccountName: {{ include "heirloom.fullname" . }}-crd-hook
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -91,7 +91,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: crd-hook
-          image: {{ include "backshots.image" . }}
+          image: {{ include "heirloom.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [install-crds]
           resources:

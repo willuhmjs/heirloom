@@ -11,7 +11,7 @@ on:
       - "go.sum"
       - "Dockerfile"
       - "config/crd/**"
-      - "charts/backshots/**"
+      - "charts/heirloom/**"
       - "scripts/e2e.sh"
       - "scripts/e2e/**"
       - ".github/workflows/e2e.yaml"

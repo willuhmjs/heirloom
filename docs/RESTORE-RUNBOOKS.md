@@ -23,8 +23,8 @@ No restic on that machine? The operator image ships it — run a one-off pod tha
 policy's folder (same isolation the movers get):
 
 ```sh
-kubectl -n NS run restic --rm -it --restart=Never --image=ghcr.io/willuhmjs/backshots \
-  --overrides='{"spec":{"containers":[{"name":"restic","image":"ghcr.io/willuhmjs/backshots","stdin":true,"tty":true,"command":["sh"],"volumeMounts":[{"name":"store","mountPath":"/store","subPath":"NS/POLICY"}]}],"volumes":[{"name":"store","nfs":{"server":"192.168.1.5","path":"/volume1/k8s-backup"}}]}}'
+kubectl -n NS run restic --rm -it --restart=Never --image=ghcr.io/willuhmjs/heirloom \
+  --overrides='{"spec":{"containers":[{"name":"restic","image":"ghcr.io/willuhmjs/heirloom","stdin":true,"tty":true,"command":["sh"],"volumeMounts":[{"name":"store","mountPath":"/store","subPath":"NS/POLICY"}]}],"volumes":[{"name":"store","nfs":{"server":"192.168.1.5","path":"/volume1/k8s-backup"}}]}}'
 # inside the pod: restic --repo /store/restic --insecure-no-password snapshots
 ```
 
@@ -130,7 +130,7 @@ Assumes the git repo and the NAS survive.
 1. Install the cluster and Flux. Before Flux reconciles encrypted secrets, recreate the key:
    `kubectl create secret generic sops-age -n flux-system --from-literal=age.agekey='AGE-SECRET-KEY-...'`
    (the age key must come from your password manager; it is not in git or on the NAS).
-2. Bootstrap Flux. Let it install the backshots HelmRelease and the BackupStore.
+2. Bootstrap Flux. Let it install the heirloom HelmRelease and the BackupStore.
 3. Apps that need data come up with empty PVCs. Suspend their Kustomizations, scale them to zero.
 4. Recreate the PVCs (these are often applied manually, not by Flux), then create `Restore` objects, or
    restore by hand with restic as above. Restore databases before the apps that use them.
@@ -148,6 +148,6 @@ You cannot eyeball a restic repository, so don't try — let the operator's `ver
 within ten weeks, plus per-source content checks), and by hand run `rs check` on a repository and
 `rs dump` a file you know to spot-check.
 
-If backshots itself is gone, none of this needs the operator: every step above works with any restic
+If heirloom itself is gone, none of this needs the operator: every step above works with any restic
 binary (the mover image ships one), `rsync`, `psql` and an NFS mount. What it does need is restic: the
 repository format is the price of dedup, and there is nothing beside the repository to `cp -a`.

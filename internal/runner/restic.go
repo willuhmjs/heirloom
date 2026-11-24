@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willuhmjs/backshots/internal/snapshot"
+	"github.com/willuhmjs/heirloom/internal/snapshot"
 )
 
 // Backups live in a restic repository at <store>/<policy>/restic: content-addressed, deduplicated
@@ -29,7 +29,7 @@ import (
 
 const resticDirName = "restic"
 
-// resticBin is the restic binary to exec: the copy `backshots install` leaves next to this executable
+// resticBin is the restic binary to exec: the copy `heirloom install` leaves next to this executable
 // when the mover runs inside the user's postgres image (which ships no restic), else the one on PATH.
 // Static and version-identical either way, so behaviour cannot drift between mover container images.
 var resticBin = sync.OnceValue(func() string {
@@ -47,7 +47,7 @@ var resticBin = sync.OnceValue(func() string {
 func (r *runner) resticRepo() string { return filepath.Join(r.policyDir, resticDirName) }
 
 // resticBase are the global flags of every restic command. --insecure-no-password creates and opens
-// unencrypted repositories (restic >= 0.17): backshots deliberately has no password to lose on the worst
+// unencrypted repositories (restic >= 0.17): heirloom deliberately has no password to lose on the worst
 // day of the year, and the NFS export's ACL stays the security boundary, as it is for plain snapshots.
 // The chunk index cache is large and regenerable, so it lives on the pod's scratch volume instead of
 // filling the node's root disk; without a scratch mount --no-cache is safer than writing to the node.
@@ -66,7 +66,7 @@ func (r *runner) resticRun(ctx context.Context, dir string, args ...string) (str
 }
 
 // resticSummary is the message_type=summary object restic backup prints with --json, and the summary each
-// entry of `restic snapshots --json` carries. Only the fields backshots reads are declared.
+// entry of `restic snapshots --json` carries. Only the fields heirloom reads are declared.
 type resticSummary struct {
 	TotalFilesProcessed int64 `json:"total_files_processed"`
 	TotalBytesProcessed int64 `json:"total_bytes_processed"`

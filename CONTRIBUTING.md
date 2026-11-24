@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. backshots is small on purpose; the fastest way to a merged change is a focused one.
+Thanks for looking. heirloom is small on purpose; the fastest way to a merged change is a focused one.
 
 ## Ground rules
 
@@ -18,7 +18,7 @@ go version        # see go.mod for the minimum
 make build test lint
 ```
 
-`make manifests` regenerates the CRDs from `api/v1alpha1`. CI fails if the committed CRDs differ, so commit them.
+`make manifests` regenerates the CRDs from `api/v1`. CI fails if the committed CRDs differ, so commit them.
 The Helm chart ships its own copy of the CRDs, and `make manifests` keeps the two in sync.
 
 ## Tests
@@ -34,7 +34,7 @@ The Helm chart ships its own copy of the CRDs, and `make manifests` keeps the tw
 - One change per PR, with the reason in the description. A bug fix includes the test that reproduces it.
 - Update [`docs/REFERENCE.md`](docs/REFERENCE.md) and the README when behaviour changes, and
   [`CHANGELOG.md`](CHANGELOG.md) for anything a user would notice.
-- API changes: keep them additive while the API is `v1alpha1`, and note them in
+- API changes: keep them additive while the API is `v1`, and note them in
   [`docs/UPGRADING.md`](docs/UPGRADING.md).
 
 ## Releases
