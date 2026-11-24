@@ -48,8 +48,9 @@ rules:
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
     verbs: [create]
-  # Events on health changes and restore progress, visible in kubectl describe.
-  - apiGroups: [""]
+  # Events on health changes and restore progress, visible in kubectl describe. The manager's
+  # recorder writes the events.k8s.io form; the core group stays for the legacy projection.
+  - apiGroups: ["", events.k8s.io]
     resources: [events]
     verbs: [create, patch]
   # The controller schedules runs itself: it creates one Job per due run and prunes old finished Jobs.
@@ -90,7 +91,7 @@ rules:
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [""]
+  - apiGroups: ["", events.k8s.io]
     resources: [events]
     verbs: [create, patch]
 ---

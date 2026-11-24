@@ -14,7 +14,9 @@ import (
 func emit(rec crtypes.EventRecorder, obj runtime.Object, eventType, reason, message string) {
 	if rec != nil {
 		// The message is user- or condition-derived, so pass it as an argument, not a format string.
-		rec.Eventf(obj, nil, eventType, reason, "", "%s", message)
+		// action is required by the events.k8s.io API (unlike the old core/v1 one), and the reason
+		// doubles as the action here: our reasons already read as verbs (ScalingDown, Succeeded, ...).
+		rec.Eventf(obj, nil, eventType, reason, reason, "%s", message)
 	}
 }
 
