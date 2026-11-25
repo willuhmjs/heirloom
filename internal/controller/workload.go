@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 )
 
 const (

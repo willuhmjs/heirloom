@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 

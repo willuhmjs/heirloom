@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 	"github.com/willuhmjs/heirloom/internal/jobcfg"
 	"github.com/willuhmjs/heirloom/internal/snapshot"
 )

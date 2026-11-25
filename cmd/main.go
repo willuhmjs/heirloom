@@ -35,7 +35,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/yaml"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 	"github.com/willuhmjs/heirloom/internal/controller"
 	"github.com/willuhmjs/heirloom/internal/crds"
 	"github.com/willuhmjs/heirloom/internal/jobcfg"

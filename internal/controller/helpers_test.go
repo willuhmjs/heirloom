@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 	"github.com/willuhmjs/heirloom/internal/jobcfg"
 )
 

@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	crtypes "sigs.k8s.io/controller-runtime/pkg/recorder"
 
-	"github.com/willuhmjs/heirloom/api/v1"
+	v1 "github.com/willuhmjs/heirloom/api/v1"
 )
 
 // emit records a Kubernetes Event when a recorder is configured (tests may leave it nil).
