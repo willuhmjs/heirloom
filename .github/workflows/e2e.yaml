@@ -69,7 +69,8 @@ jobs:
           cat /proc/fs/nfsd/versions
           SCRIPT
           if ! bash /tmp/nfs.sh > /tmp/nfs.log 2>&1; then
-            body=$(grep -v -E '^(Get|Hit|Fetched|Reading|Selecting|Preparing|Unpacking|Setting up)' /tmp/nfs.log | tail -n 30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            body=$(tail -n 40 /tmp/nfs.log | tr -d '%' | tr '
+' '|' | cut -c1-3500)
             echo "::error title=nfs-step::${body}"
             exit 1
           fi
