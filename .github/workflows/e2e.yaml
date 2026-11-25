@@ -69,8 +69,7 @@ jobs:
           cat /proc/fs/nfsd/versions
           SCRIPT
           if ! bash /tmp/nfs.sh > /tmp/nfs.log 2>&1; then
-            body=$(tail -n 40 /tmp/nfs.log | tr -d '%' | tr '
-' '|' | cut -c1-3500)
+            body=$(tail -n 40 /tmp/nfs.log | tr -d '%' | tr -s '[:space:]' ' ' | cut -c1-3500)
             echo "::error title=nfs-step::${body}"
             exit 1
           fi
