@@ -54,25 +54,17 @@ jobs:
       # that container dies and every NFS assertion fails much later. Fail loudly here instead.
       - name: NFS kernel server support
         run: |
-          # TEMP diagnostics: run the setup, then surface its trace as a public annotation if it fails.
-          cat > /tmp/nfs.sh <<'SCRIPT'
-          set -euxo pipefail
-          uname -r
-          sudo apt-get update
-          sudo systemctl mask nfs-server.service nfs-mountd.service rpc-statd.service || true
-          sudo apt-get install -y nfs-kernel-server || true
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nfs-kernel-server
+          # The runner's kernel may ship nfsd in the extra-modules package rather than the base image.
           if ! sudo modprobe nfsd; then
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)" || sudo apt-get install -y linux-modules-extra-azure
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || sudo apt-get install -y -qq linux-modules-extra-azure
             sudo modprobe nfsd
           fi
+          # /proc/fs/nfsd is its own filesystem and root-only, so mount it if the distro service did not.
           mountpoint -q /proc/fs/nfsd || sudo mount -t nfsd nfsd /proc/fs/nfsd
-          cat /proc/fs/nfsd/versions
-          SCRIPT
-          if ! bash /tmp/nfs.sh > /tmp/nfs.log 2>&1; then
-            body=$(tail -n 40 /tmp/nfs.log | tr -d '%' | tr -s '[:space:]' ' ' | cut -c1-3500)
-            echo "::error title=nfs-step::${body}"
-            exit 1
-          fi
+          sudo cat /proc/fs/nfsd/versions
       # All of this lands on one runner: kind node image (~1 GiB), postgres, the operator, mover
       # pods and two ~10-minute image builds. 30 minutes is roomy for the script's own ~5 minutes.
       - name: End-to-end run
