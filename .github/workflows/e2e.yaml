@@ -54,7 +54,12 @@ jobs:
       # that container dies and every NFS assertion fails much later. Fail loudly here instead.
       - name: NFS kernel server support
         run: |
-          set -euxo pipefail
+          set -uxo pipefail
+          # TEMP diagnostics: surface this step's output as a public annotation, then fail as before.
+          exec > >(tee /tmp/nfs-step.log) 2>&1
+          trap 'rc=$?; if [ $rc -ne 0 ]; then printf "::error title=nfs-step rc=%s::%s\n" "$rc" "$(tail -n 25 /tmp/nfs-step.log | sed -e "s/%/%25/g" | awk "{printf \"%s%%0A\", \$0}")" >&3; fi' EXIT
+          exec 3>&1
+          set -e
           uname -r
           sudo apt-get update
           # Only the userspace tools are needed on the host: the server itself runs in the container. Skip the
