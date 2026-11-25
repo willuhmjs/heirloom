@@ -54,26 +54,25 @@ jobs:
       # that container dies and every NFS assertion fails much later. Fail loudly here instead.
       - name: NFS kernel server support
         run: |
-          set -uxo pipefail
-          # TEMP diagnostics: surface this step's output as a public annotation, then fail as before.
-          exec > >(tee /tmp/nfs-step.log) 2>&1
-          trap 'rc=$?; if [ $rc -ne 0 ]; then printf "::error title=nfs-step rc=%s::%s\n" "$rc" "$(tail -n 25 /tmp/nfs-step.log | sed -e "s/%/%25/g" | awk "{printf \"%s%%0A\", \$0}")" >&3; fi' EXIT
-          exec 3>&1
-          set -e
+          # TEMP diagnostics: run the setup, then surface its trace as a public annotation if it fails.
+          cat > /tmp/nfs.sh <<'SCRIPT'
+          set -euxo pipefail
           uname -r
           sudo apt-get update
-          # Only the userspace tools are needed on the host: the server itself runs in the container. Skip the
-          # package's own service so its postinst cannot fail on a runner without nfsd.
-          sudo systemctl mask nfs-server.service nfs-mountd.service rpc-statd.service 2>/dev/null || true
+          sudo systemctl mask nfs-server.service nfs-mountd.service rpc-statd.service || true
           sudo apt-get install -y nfs-kernel-server || true
-          # The runner's Azure kernel ships nfsd in the extra-modules package, not the base image.
           if ! sudo modprobe nfsd; then
             sudo apt-get install -y "linux-modules-extra-$(uname -r)" || sudo apt-get install -y linux-modules-extra-azure
             sudo modprobe nfsd
           fi
-          # /proc/fs/nfsd is its own filesystem; the distro's service normally mounts it.
           mountpoint -q /proc/fs/nfsd || sudo mount -t nfsd nfsd /proc/fs/nfsd
           cat /proc/fs/nfsd/versions
+          SCRIPT
+          if ! bash /tmp/nfs.sh > /tmp/nfs.log 2>&1; then
+            body=$(grep -v -E '^(Get|Hit|Fetched|Reading|Selecting|Preparing|Unpacking|Setting up)' /tmp/nfs.log | tail -n 30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=nfs-step::${body}"
+            exit 1
+          fi
       # All of this lands on one runner: kind node image (~1 GiB), postgres, the operator, mover
       # pods and two ~10-minute image builds. 30 minutes is roomy for the script's own ~5 minutes.
       - name: End-to-end run
