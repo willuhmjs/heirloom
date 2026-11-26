@@ -78,3 +78,5 @@ jobs:
         with:
           context: .
           push: false
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
