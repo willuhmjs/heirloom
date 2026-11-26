@@ -56,7 +56,7 @@ func storeNeedsClaim(store *v1.BackupStore) bool {
 func storePVSource(store *v1.BackupStore, name string) (corev1.PersistentVolumeSource, corev1.PersistentVolumeReclaimPolicy) {
 	if smb := store.Spec.SMB; smb != nil {
 		return corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{
-			Driver:             smbDriver,
+			Driver: smbDriver,
 			// Part of the handle is a hash of the mount options: the node plugin keeps one staged mount per handle
 			// and reuses it as long as it exists, so a PV recreated with new options under an unchanged handle
 			// would silently keep mounting with the old ones.
