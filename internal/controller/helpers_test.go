@@ -37,7 +37,7 @@ func newFake(t *testing.T, objs ...client.Object) client.Client {
 		objs = append(objs, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "apps"}})
 	}
 	return fake.NewClientBuilder().WithScheme(scheme).
-		WithStatusSubresource(&v1.BackupPolicy{}, &v1.Restore{}).
+		WithStatusSubresource(&v1.BackupPolicy{}, &v1.Restore{}, &v1.BackupStore{}).
 		WithObjects(objs...).Build()
 }
 

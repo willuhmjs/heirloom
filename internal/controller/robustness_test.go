@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/willuhmjs/heirloom/api/v1"
@@ -635,5 +636,30 @@ func TestStatusCarriesStoreSizeAndLastResult(t *testing.T) {
 	applySuccess(st, run{job: &batchv1.Job{}, at: testNow, ok: true, result: jobcfg.Result{Snapshot: "abc", Added: 2048, RepoBytes: 5 << 20, Kept: 3}})
 	if st.LastAdded != "2.0 KiB" || st.RepoSize != "5.0 MiB" || st.SnapshotsKept != 3 {
 		t.Errorf("status = %+v", st)
+	}
+}
+
+func TestStoreStatusShowsTarget(t *testing.T) {
+	for _, tc := range []struct {
+		store *v1.BackupStore
+		want  string
+		enc   bool
+	}{
+		{testStore(), "nfs://10.0.0.2/volume1/k8s", false},
+		{smbStore(), "smb://10.0.0.3/k8s-backup", false},
+		{encryptedStore(), "nfs://10.0.0.2/volume1/k8s", true},
+	} {
+		c := newFake(t, tc.store)
+		r := &StoreReconciler{Client: c}
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Name: tc.store.Name}}); err != nil {
+			t.Fatal(err)
+		}
+		var got v1.BackupStore
+		if err := c.Get(context.Background(), client.ObjectKey{Name: tc.store.Name}, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Status.Target != tc.want || got.Status.Encrypted != tc.enc {
+			t.Errorf("status = %+v, want target %q encrypted %v", got.Status, tc.want, tc.enc)
+		}
 	}
 }

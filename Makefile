@@ -1,4 +1,4 @@
-IMG ?= ghcr.io/willuhmjs/heirloom:1.2.2
+IMG ?= ghcr.io/willuhmjs/heirloom:1.2.3
 CHART := charts/heirloom
 
 .PHONY: all build test lint manifests crds-chart docker-build helm-lint helm-template

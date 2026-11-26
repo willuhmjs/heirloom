@@ -15,20 +15,27 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.target
+      name: Target
+      type: string
+    - jsonPath: .status.encrypted
+      name: Encrypted
+      type: boolean
     - jsonPath: .spec.nfs.server
       name: NFS Server
+      priority: 1
       type: string
     - jsonPath: .spec.nfs.path
       name: NFS Path
+      priority: 1
       type: string
     - jsonPath: .spec.smb.server
       name: SMB Server
+      priority: 1
       type: string
     - jsonPath: .spec.smb.share
       name: SMB Share
-      type: string
-    - jsonPath: .spec.encryption.passwordSecretRef.name
-      name: Encryption
+      priority: 1
       type: string
     name: v1
     schema:
@@ -185,9 +192,23 @@ spec:
             x-kubernetes-validations:
             - message: set exactly one of nfs or smb
               rule: has(self.nfs) != has(self.smb)
+          status:
+            description: BackupStoreStatus summarises the store for dashboards and
+              kubectl.
+            properties:
+              encrypted:
+                description: Encrypted reports whether the store's repositories carry
+                  a password.
+                type: boolean
+              target:
+                description: Target is where the store points, for example smb://192.168.50.153/backups
+                  or nfs://192.168.1.5/volume1/k8s-backup.
+                type: string
+            type: object
         required:
         - spec
         type: object
     served: true
     storage: true
-    subresources: {}
+    subresources:
+      status: {}

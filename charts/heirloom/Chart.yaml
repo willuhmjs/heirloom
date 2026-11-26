@@ -2,8 +2,8 @@ apiVersion: v2
 name: heirloom
 description: Kubernetes-native backups that land as deduplicated restic repositories on your NAS. App-consistent Postgres and SQLite dumps, GFS retention with prune, restores that are tested.
 type: application
-version: 1.2.2
-appVersion: 1.2.2
+version: 1.2.3
+appVersion: 1.2.3
 kubeVersion: ">=1.29.0-0"
 home: https://willuhmjs.github.io/heirloom/
 icon: https://raw.githubusercontent.com/willuhmjs/heirloom/main/docs/assets/logo.svg
