@@ -2,7 +2,7 @@
 
 ## How it was tested
 
-<!-- Unit tests, scripts/e2e.sh, or by hand. Say which NAS / database version if it matters, and what you did NOT test. -->
+<!-- Unit tests, the unit tests, or by hand. Say which NAS / database version if it matters, and what you did NOT test. -->
 
 ## Checklist
 
