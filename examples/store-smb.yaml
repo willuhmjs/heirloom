@@ -1,0 +1,27 @@
+# SMB share, mounted through csi-driver-smb (https://github.com/kubernetes-csi/csi-driver-smb), which must be
+# installed in the cluster. The share's user needs read/write access; the Secret is read by the CSI driver.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: smb-creds
+  namespace: heirloom-system
+stringData:
+  username: heirloom
+  password: change-me
+  # domain: WORKGROUP
+---
+apiVersion: heirloom.io/v1
+kind: BackupStore
+metadata:
+  name: default
+spec:
+  smb:
+    server: 192.168.1.5
+    share: k8s-backup
+    credentialsSecretRef: {name: smb-creds, namespace: heirloom-system}
+    mountOptions: [vers=3.0, uid=0, gid=0, dir_mode=0700, file_mode=0600]
+  retention:
+    hourly: 24
+    daily: 30
+    weekly: 12
+    monthly: 24

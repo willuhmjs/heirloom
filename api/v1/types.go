@@ -36,9 +36,41 @@ type NFSSpec struct {
 	MountOptions []string `json:"mountOptions,omitempty"`
 }
 
-// BackupStoreSpec describes where backups live.
+// SecretRef names a Secret in any namespace. The store is cluster-scoped, so the namespace is explicit.
+type SecretRef struct {
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+}
+
+// SMBSpec points at an SMB/CIFS share that receives the restic repositories. The share is mounted by the
+// csi-driver-smb CSI driver (smb.csi.k8s.io), which must be installed in the cluster.
+type SMBSpec struct {
+	// Server is the host name or address of the SMB server.
+	// +kubebuilder:validation:MinLength=1
+	Server string `json:"server"`
+	// Share is the name of the share on the server, without slashes, e.g. k8s-backup.
+	// +kubebuilder:validation:Pattern=`^[^/\\]+$`
+	Share string `json:"share"`
+	// CredentialsSecretRef names a Secret holding the keys username and password (and optionally domain), as
+	// csi-driver-smb expects. The kubelet and the CSI driver read it, not the operator.
+	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
+	// MountOptions are passed verbatim to the CIFS mount on mover pods, e.g. ["vers=3.0", "uid=0", "gid=0",
+	// "dir_mode=0700", "file_mode=0600"]. Without them the driver's defaults apply.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9,.:=/_-]+$`
+	// +optional
+	MountOptions []string `json:"mountOptions,omitempty"`
+}
+
+// BackupStoreSpec describes where backups live. Set exactly one of nfs or smb.
+// +kubebuilder:validation:XValidation:rule="has(self.nfs) != has(self.smb)",message="set exactly one of nfs or smb"
 type BackupStoreSpec struct {
-	NFS NFSSpec `json:"nfs"`
+	// +optional
+	NFS *NFSSpec `json:"nfs,omitempty"`
+	// +optional
+	SMB *SMBSpec `json:"smb,omitempty"`
 	// Retention applied to policies that do not set their own.
 	// Defaults to hourly=24 daily=30 weekly=12 monthly=24.
 	// +optional
@@ -49,6 +81,8 @@ type BackupStoreSpec struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Server",type=string,JSONPath=`.spec.nfs.server`
 // +kubebuilder:printcolumn:name="Path",type=string,JSONPath=`.spec.nfs.path`
+// +kubebuilder:printcolumn:name="SMB Server",type=string,priority=1,JSONPath=`.spec.smb.server`
+// +kubebuilder:printcolumn:name="SMB Share",type=string,priority=1,JSONPath=`.spec.smb.share`
 type BackupStore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -29,6 +29,7 @@ write as root (`no_root_squash`), because the movers preserve file ownership.
 | `metrics.secure` | `true` | serve metrics over TLS and require an authenticated, authorized caller |
 | `serviceMonitor.enabled` | `false` | render a Prometheus Operator ServiceMonitor |
 | `store.create` | `false` | also render a default cluster-scoped `BackupStore` |
+| `store.smb.server`, `store.smb.share`, `store.smb.credentialsSecret`, `store.smb.credentialsSecretNamespace`, `store.smb.mountOptions` | | use an SMB share instead of NFS (needs [csi-driver-smb](https://github.com/kubernetes-csi/csi-driver-smb)); leave `store.nfs.server` empty |
 | `store.name`, `store.nfs.server`, `store.nfs.path`, `store.nfs.mountOptions`, `store.retention` | | the default store (`mountOptions` make movers mount it through a provisioned static PV/PVC, because inline NFS cannot carry options) |
 | `resources`, `nodeSelector`, `tolerations`, `podAnnotations` | small defaults | for the manager pod |
 

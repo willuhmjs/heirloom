@@ -55,5 +55,15 @@ store:
     # Passed verbatim to the store mount, e.g. ["nfsvers=4.1", "hard"]. Sets the operator
     # provisioning a static PV/PVC per namespace (inline NFS volumes cannot carry options).
     mountOptions: []
+  # Use an SMB share instead of NFS by setting smb.server (leave nfs.server empty). Needs the
+  # csi-driver-smb CSI driver (smb.csi.k8s.io) installed in the cluster. The Secret holds the keys
+  # username and password (and optionally domain) and is read by the CSI driver, not the operator.
+  smb:
+    server: ""
+    share: ""
+    credentialsSecret: ""
+    credentialsSecretNamespace: ""   # defaults to the release namespace
+    # Passed verbatim to the CIFS mount, e.g. ["vers=3.0", "uid=0", "gid=0", "dir_mode=0700", "file_mode=0600"].
+    mountOptions: []
   # Defaults when omitted: hourly=24 daily=30 weekly=12 monthly=24
   retention: {}

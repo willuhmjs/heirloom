@@ -208,15 +208,17 @@ func (m moverPod) moverResources() corev1.ResourceRequirements {
 }
 
 func (m moverPod) volumes() []corev1.Volume {
-	// With mountOptions the export arrives through a provisioned static PV/PVC (an inline NFS volume
-	// cannot carry mount options); otherwise the mover mounts the export directly.
-	storeVol := corev1.Volume{Name: volStore, VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{
-		Server: m.store.Spec.NFS.Server,
-		Path:   m.store.Spec.NFS.Path,
-	}}}
-	if len(m.store.Spec.NFS.MountOptions) > 0 {
+	// With mountOptions, or for an SMB share, the store arrives through a provisioned static PV/PVC (an inline
+	// NFS volume cannot carry mount options); otherwise the mover mounts the export directly.
+	storeVol := corev1.Volume{Name: volStore}
+	if storeNeedsClaim(m.store) {
 		storeVol.VolumeSource = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 			ClaimName: storeClaimName(m.namespace, m.store.Name),
+		}}
+	} else {
+		storeVol.VolumeSource = corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{
+			Server: m.store.Spec.NFS.Server,
+			Path:   m.store.Spec.NFS.Path,
 		}}
 	}
 	vols := []corev1.Volume{

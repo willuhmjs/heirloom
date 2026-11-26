@@ -233,7 +233,12 @@ Known limits are listed in [`docs/REFERENCE.md`](docs/REFERENCE.md#limitations);
 ## FAQ
 
 **Why NFS?** It is the one protocol that nearly every NAS speaks and that restic can write to directly as a local
-backend, with ownership and symlinks intact. SMB loses ownership and symlinks; object stores have neither.
+backend, with ownership and symlinks intact. Object stores have neither.
+
+**Can I use SMB instead?** Yes: set `spec.smb` on the `BackupStore` (or `store.smb.*` in the chart). It is mounted
+through [csi-driver-smb](https://github.com/kubernetes-csi/csi-driver-smb), which you install first. A restic
+repository does not need ownership or symlinks on the share, so SMB works. See
+[`docs/REFERENCE.md`](docs/REFERENCE.md#smb-instead-of-nfs) and [`examples/store-smb.yaml`](examples/store-smb.yaml).
 
 **Why not encrypt?** No password to lose on the worst day, and no key to misplace when you need the data most. The
 tradeoff: whoever can read the share can read your data, so lock the export down to your nodes. If you need

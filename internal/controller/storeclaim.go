@@ -24,7 +24,47 @@ import (
 // only a pointer at the export: its reclaim policy is Delete, which removes the object, never NFS
 // data (the in-tree NFS driver wipes nothing).
 
-const storeClaimSize = "1Gi" // NFS ignores capacity; kubelet only checks PVC request <= PV size
+// An SMB store always needs the pair: the CSI driver takes its credentials from the PV (nodeStageSecretRef),
+// which an inline volume cannot carry. Its reclaim policy is Retain, since csi-driver-smb does not delete
+// statically provisioned volumes and a Delete policy would leave the PV in a Failed phase; heirloom removes
+// a released PV itself, and deleting the object never touches the share.
+
+const (
+	storeClaimSize = "1Gi" // NFS and SMB ignore capacity; kubelet only checks PVC request <= PV size
+	smbDriver      = "smb.csi.k8s.io"
+)
+
+// storeMountOptions are the mount options the store pins, whichever protocol it speaks.
+func storeMountOptions(store *v1.BackupStore) []string {
+	switch {
+	case store.Spec.SMB != nil:
+		return store.Spec.SMB.MountOptions
+	case store.Spec.NFS != nil:
+		return store.Spec.NFS.MountOptions
+	}
+	return nil
+}
+
+// storeNeedsClaim reports whether movers mount the store through a provisioned PV/PVC pair rather than inline.
+func storeNeedsClaim(store *v1.BackupStore) bool {
+	return store.Spec.SMB != nil || len(storeMountOptions(store)) > 0
+}
+
+// storePVSource is the PersistentVolume source pointing at the store's export or share, and the reclaim
+// policy that suits it. name is the PV's own name, which makes the CSI volume handle unique.
+func storePVSource(store *v1.BackupStore, name string) (corev1.PersistentVolumeSource, corev1.PersistentVolumeReclaimPolicy) {
+	if smb := store.Spec.SMB; smb != nil {
+		return corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{
+			Driver:             smbDriver,
+			VolumeHandle:       fmt.Sprintf("%s/%s#heirloom#%s", smb.Server, smb.Share, name),
+			VolumeAttributes:   map[string]string{"source": fmt.Sprintf("//%s/%s", smb.Server, smb.Share)},
+			NodeStageSecretRef: &corev1.SecretReference{Name: smb.CredentialsSecretRef.Name, Namespace: smb.CredentialsSecretRef.Namespace},
+		}}, corev1.PersistentVolumeReclaimRetain
+	}
+	return corev1.PersistentVolumeSource{
+		NFS: &corev1.NFSVolumeSource{Server: store.Spec.NFS.Server, Path: store.Spec.NFS.Path},
+	}, corev1.PersistentVolumeReclaimDelete
+}
 
 // storeClaimName is the deterministic name of the PV/PVC pair one store's mount options get in one
 // namespace. Every policy in the namespace shares it, so the export is mounted once per node.
@@ -32,15 +72,15 @@ func storeClaimName(namespace, store string) string {
 	return "heirloom-store-" + shortHash(namespace+"/"+store)
 }
 
-// ensureStoreClaim provisions the PV+PVC pair for a store with mountOptions, and adds p as one of
-// the claim's owners. When no mountOptions are set it is a no-op: movers then mount the export
-// inline, exactly as before. It reports whether the pair is ready to mount, plus a message for why
+// ensureStoreClaim provisions the PV+PVC pair for a store with mountOptions or an SMB share, and adds p as
+// one of the claim's owners. For an NFS store without mountOptions it is a no-op: movers then mount the
+// export inline, exactly as before. It reports whether the pair is ready to mount, plus a message for why
 // it is not.
 func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, p *v1.BackupPolicy, store *v1.BackupStore) (bool, string, error) {
-	opts := store.Spec.NFS.MountOptions
-	if len(opts) == 0 {
+	if !storeNeedsClaim(store) {
 		return true, "", nil
 	}
+	opts := storeMountOptions(store)
 	name := storeClaimName(p.Namespace, store.Name)
 
 	pvc := &corev1.PersistentVolumeClaim{
@@ -61,6 +101,7 @@ func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader
 	var pv corev1.PersistentVolume
 	err := reader.Get(ctx, types.NamespacedName{Name: name}, &pv)
 	if apierrors.IsNotFound(err) {
+		source, reclaim := storePVSource(store, name)
 		want := &corev1.PersistentVolume{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"heirloom.io/store": labelValue(store.Name)}},
 			Spec: corev1.PersistentVolumeSpec{
@@ -69,11 +110,9 @@ func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader
 				MountOptions:                  opts,
 				VolumeMode:                    ptr.To(corev1.PersistentVolumeFilesystem),
 				StorageClassName:              "",
-				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
-				PersistentVolumeSource: corev1.PersistentVolumeSource{
-					NFS: &corev1.NFSVolumeSource{Server: store.Spec.NFS.Server, Path: store.Spec.NFS.Path},
-				},
-				ClaimRef: &corev1.ObjectReference{Namespace: p.Namespace, Name: name},
+				PersistentVolumeReclaimPolicy: reclaim,
+				PersistentVolumeSource:        source,
+				ClaimRef:                      &corev1.ObjectReference{Namespace: p.Namespace, Name: name},
 			},
 		}
 		if err := c.Create(ctx, want); err != nil && !apierrors.IsAlreadyExists(err) {

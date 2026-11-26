@@ -115,6 +115,29 @@
             }
           }
         },
+        "smb": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            },
+            "share": {
+              "type": "string"
+            },
+            "credentialsSecret": {
+              "type": "string"
+            },
+            "credentialsSecretNamespace": {
+              "type": "string"
+            },
+            "mountOptions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "retention": {
           "type": "object",
           "properties": {

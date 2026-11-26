@@ -116,6 +116,28 @@ you no longer need them.
 
 Nodes need an NFS client (`nfs-common` / `nfs-utils`).
 
+### SMB instead of NFS
+
+A `BackupStore` can point at an SMB/CIFS share instead (set exactly one of `spec.nfs` or `spec.smb`). The share is
+mounted by [csi-driver-smb](https://github.com/kubernetes-csi/csi-driver-smb), which you install first
+(`smb.csi.k8s.io`). Create a Secret with the keys
+`username` and `password` (optionally `domain`) and reference it from the store; see `examples/store-smb.yaml`:
+
+```sh
+helm install heirloom heirloom/heirloom -n heirloom-system --create-namespace \
+  --set store.create=true \
+  --set store.smb.server=192.168.1.5 \
+  --set store.smb.share=k8s-backup \
+  --set store.smb.credentialsSecret=smb-creds
+```
+
+An SMB store always goes through the provisioned static PV/PVC pair (the driver takes its credentials from the PV),
+with `persistentVolumeReclaimPolicy: Retain` because csi-driver-smb does not delete statically provisioned volumes;
+heirloom deletes a released PV itself, and that never touches the share. Restic's local repository needs neither
+ownership nor symlinks on the share, so SMB works as a backend; a share that holds nothing else is still best.
+Recommended `mountOptions`: `vers=3.0`, `uid=0`, `gid=0`, `dir_mode=0700`, `file_mode=0600`. Unlike NFS, SMB
+authenticates a user, so the credentials in the Secret are the security boundary: restrict who can read it.
+
 ## Retention
 
 `spec.retention` (`keepHourly`/`keepDaily`/`keepWeekly`/`keepMonthly`) maps directly to
@@ -217,7 +239,7 @@ excludes.
 
 | kind | scope | purpose |
 |---|---|---|
-| `BackupStore` | cluster | NFS server and path, optional NFS `mountOptions`, default retention |
+| `BackupStore` | cluster | NFS server and path, or an SMB server, share and credentials Secret; optional `mountOptions`; default retention |
 | `BackupPolicy` (`bp`) | namespaced | storeRef, schedule, jitter, one source, retention, verify, trigger, suspend, pod options |
 | `Restore` (`brs`) | namespaced | policyRef, from, targetPVC, paths, databases, delete, scaleDown |
 
@@ -348,7 +370,7 @@ ServiceMonitor that uses Prometheus's ServiceAccount token. For a closed network
 
 ## Limitations
 
-- One NFS store per policy. Any namespace can reference any `BackupStore`; each policy still only ever sees
+- One store (NFS or SMB) per policy. Any namespace can reference any `BackupStore`; each policy still only ever sees
   its own `<namespace>/<policy>` directory, and a policy's run only ever opens its own repository.
 - The store is not browsable. Individual files come back with the restic binary (`restic -r <ns>/<policy>/restic
   --insecure-no-password dump/restore`), not with `ls` and `cp` on the NAS.
