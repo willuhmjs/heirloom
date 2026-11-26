@@ -112,7 +112,7 @@ func ensureStoreClaim(ctx context.Context, c client.Client, reader client.Reader
 				StorageClassName:              "",
 				PersistentVolumeReclaimPolicy: reclaim,
 				PersistentVolumeSource:        source,
-				ClaimRef: &corev1.ObjectReference{Namespace: p.Namespace, Name: name},
+				ClaimRef:                      &corev1.ObjectReference{Namespace: p.Namespace, Name: name},
 			},
 		}
 		if err := c.Create(ctx, want); err != nil && !apierrors.IsAlreadyExists(err) {
