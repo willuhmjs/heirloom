@@ -622,3 +622,18 @@ func TestPlainStoreHasNoPasswordEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusCarriesStoreSizeAndLastResult(t *testing.T) {
+	c := newFake(t, encryptedStore(), masterSecret("master"), policyDue(filesPolicy()))
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	var p v1.BackupPolicy
+	mustGet(t, c, "apps", "app", &p)
+	if p.Status.Store != "nas" || !p.Status.Encrypted {
+		t.Errorf("store/encrypted = %q/%v, want nas/true", p.Status.Store, p.Status.Encrypted)
+	}
+	st := &v1.BackupPolicyStatus{}
+	applySuccess(st, run{job: &batchv1.Job{}, at: testNow, ok: true, result: jobcfg.Result{Snapshot: "abc", Added: 2048, RepoBytes: 5 << 20, Kept: 3}})
+	if st.LastAdded != "2.0 KiB" || st.RepoSize != "5.0 MiB" || st.SnapshotsKept != 3 {
+		t.Errorf("status = %+v", st)
+	}
+}

@@ -113,6 +113,9 @@ type Result struct {
 	Duration float64   `json:"durationSeconds"`
 	Bytes    int64     `json:"bytes,omitempty"`
 	Files    int64     `json:"files,omitempty"`
+	// Added is what the run added to the repository after dedup; RepoBytes the repository's size afterwards.
+	Added     int64 `json:"added,omitempty"`
+	RepoBytes int64 `json:"repoBytes,omitempty"`
 	// Kept and Pruned are snapshot counts after retention (backup mode).
 	Kept   int `json:"kept,omitempty"`
 	Pruned int `json:"pruned,omitempty"`

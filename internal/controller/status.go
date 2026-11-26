@@ -30,6 +30,12 @@ func metaTime(t time.Time) *metav1.Time {
 func deriveStatus(p *v1.BackupPolicy, jobs []batchv1.Job, pods []corev1.Pod, now time.Time) {
 	st := &p.Status
 	backups := finishedRuns(jobs, pods, jobcfg.ModeBackup)
+	if n := len(backups); n > 0 && backups[n-1].result.Message != "" {
+		st.LastMessage = backups[n-1].result.Message
+		if len(st.LastMessage) > 300 {
+			st.LastMessage = st.LastMessage[:300] + "…"
+		}
+	}
 	applySuccessfulBackup(st, backups) // must precede healthCondition: staleness reads status.lastSyncTime
 	meta.SetStatusCondition(&st.Conditions, healthCondition(p, backups, now))
 	applyManual(st, p.Spec.Trigger.Manual, p.Generation, jobs)
@@ -139,6 +145,24 @@ func applySuccess(st *v1.BackupPolicyStatus, r run) {
 		st.LastSyncDuration = &metav1.Duration{Duration: (time.Duration(res.Duration * float64(time.Second))).Round(time.Millisecond)}
 	}
 	st.SnapshotsKept = int32(res.Kept)
+	st.LastAdded = humanBytes(res.Added)
+	if res.RepoBytes > 0 {
+		st.RepoSize = humanBytes(res.RepoBytes)
+	}
+}
+
+// humanBytes renders a byte count in binary units, for the status columns.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // applyManual records the trigger value once its manual Job has succeeded.

@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.2.2] - 2026-11-26
+
+### Added
+- Richer `BackupPolicy` status for dashboards and `kubectl get`: `store`, `encrypted`, `repoSize` (repository size
+  after the run), `lastAdded` (bytes added after dedup) and `lastMessage` (one-line result of the newest run,
+  failed or not), with matching printer columns (Size, Added, Took, Store, Encrypted, and Result in wide output).
+
 ## [1.2.1] - 2026-11-26
 
 ### Fixed
