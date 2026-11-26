@@ -117,6 +117,9 @@ func runManager(args []string) error {
 	if err := (&controller.PolicyReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("heirloom-policy")}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up policy controller: %w", err)
 	}
+	if err := (&controller.StoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setting up store controller: %w", err)
+	}
 	restore := &controller.RestoreReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: scheme, Image: image, Recorder: mgr.GetEventRecorder("heirloom-restore")}
 	if err := restore.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up restore controller: %w", err)

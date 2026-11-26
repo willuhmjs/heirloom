@@ -106,15 +106,26 @@ type BackupStoreSpec struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
-// +kubebuilder:printcolumn:name="NFS Server",type=string,JSONPath=`.spec.nfs.server`
-// +kubebuilder:printcolumn:name="NFS Path",type=string,JSONPath=`.spec.nfs.path`
-// +kubebuilder:printcolumn:name="SMB Server",type=string,JSONPath=`.spec.smb.server`
-// +kubebuilder:printcolumn:name="SMB Share",type=string,JSONPath=`.spec.smb.share`
-// +kubebuilder:printcolumn:name="Encryption",type=string,JSONPath=`.spec.encryption.passwordSecretRef.name`
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.status.target`
+// +kubebuilder:printcolumn:name="Encrypted",type=boolean,JSONPath=`.status.encrypted`
+// +kubebuilder:printcolumn:name="NFS Server",type=string,priority=1,JSONPath=`.spec.nfs.server`
+// +kubebuilder:printcolumn:name="NFS Path",type=string,priority=1,JSONPath=`.spec.nfs.path`
+// +kubebuilder:printcolumn:name="SMB Server",type=string,priority=1,JSONPath=`.spec.smb.server`
+// +kubebuilder:printcolumn:name="SMB Share",type=string,priority=1,JSONPath=`.spec.smb.share`
 type BackupStore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              BackupStoreSpec `json:"spec"`
+	Spec              BackupStoreSpec   `json:"spec"`
+	Status            BackupStoreStatus `json:"status,omitempty"`
+}
+
+// BackupStoreStatus summarises the store for dashboards and kubectl.
+type BackupStoreStatus struct {
+	// Target is where the store points, for example smb://192.168.50.153/backups or nfs://192.168.1.5/volume1/k8s-backup.
+	Target string `json:"target,omitempty"`
+	// Encrypted reports whether the store's repositories carry a password.
+	Encrypted bool `json:"encrypted,omitempty"`
 }
 
 // +kubebuilder:object:root=true

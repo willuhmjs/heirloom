@@ -9,7 +9,7 @@ rules:
     resources: [backupstores, backuppolicies, restores]
     verbs: [get, list, watch]
   - apiGroups: [heirloom.io]
-    resources: [backuppolicies/status, restores/status]
+    resources: [backuppolicies/status, restores/status, backupstores/status]
     verbs: [get, update]
   # A Restore carries a finalizer so that deleting it mid-flight puts scaled-down workloads back (metadata update).
   - apiGroups: [heirloom.io]

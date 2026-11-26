@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.2.3] - 2026-11-26
+
+### Added
+- `BackupStore` has a status (`target`, `encrypted`) kept current by the operator, and `kubectl get backupstores` /
+  dashboards lead with a single `Target` column (`smb://192.168.50.153/backups`, `nfs://host/path`) and `Encrypted`.
+  The protocol-specific NFS/SMB columns move to wide output. New RBAC: update on `backupstores/status`.
+
 ## [1.2.2] - 2026-11-26
 
 ### Added
