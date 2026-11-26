@@ -266,14 +266,22 @@ func (m moverPod) scratchSource() corev1.VolumeSource {
 	}}
 }
 
+// jobTTLSeconds bounds how old finished run Jobs (and with them their pods and scratch ephemeral
+// PVCs) may get. pruneHistory caps finished runs by count (3 per role and outcome), which is tight
+// for hourly policies but lets a nightly policy's history - including its failed runs - age without
+// limit; this adds the wall-clock bound. A week keeps a failed nightly discoverable after a weekend
+// away; the policy's status and events carry the outcome far longer regardless.
+const jobTTLSeconds int32 = 7 * 24 * 3600
+
 // jobSpec wraps a pod spec into a Job spec whose pods carry labels.
 func jobSpec(labels map[string]string, pod corev1.PodSpec, backoffLimit int32, deadline *int64) batchv1.JobSpec {
 	if deadline == nil {
 		deadline = ptr.To(defaultActiveDeadline)
 	}
 	return batchv1.JobSpec{
-		BackoffLimit:          ptr.To(backoffLimit),
-		ActiveDeadlineSeconds: deadline,
+		BackoffLimit:            ptr.To(backoffLimit),
+		ActiveDeadlineSeconds:   deadline,
+		TTLSecondsAfterFinished: ptr.To(jobTTLSeconds),
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       pod,

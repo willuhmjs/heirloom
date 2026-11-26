@@ -76,6 +76,9 @@ func TestScheduledBackupJob(t *testing.T) {
 	if *js.BackoffLimit != 1 || *js.ActiveDeadlineSeconds != 3600 {
 		t.Errorf("backoff/deadline = %d/%d", *js.BackoffLimit, *js.ActiveDeadlineSeconds)
 	}
+	if js.TTLSecondsAfterFinished == nil || *js.TTLSecondsAfterFinished != jobTTLSeconds {
+		t.Errorf("ttlSecondsAfterFinished = %v, want %d", js.TTLSecondsAfterFinished, jobTTLSeconds)
+	}
 	if cj.Labels[jobcfg.LabelPolicy] != "app" || cj.Labels[jobcfg.LabelRole] != "backup" {
 		t.Errorf("labels = %v", cj.Labels)
 	}

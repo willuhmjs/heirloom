@@ -30,7 +30,8 @@ cron expression does not stampede the NAS at the same second.
 It never starts a second run while one is active, starts nothing while a `Restore` for the policy is running
 — and a `Restore` waits for an already-running backup or verify to finish, so nothing shares the repository
 while a restore rewrites a volume —
-prunes old finished Jobs (keeps 3 succeeded and 3 failed per role), and reads results back from pod
+prunes old finished Jobs (keeps 3 succeeded and 3 failed per role, and age-bounds them with a 7-day
+`ttlSecondsAfterFinished`), and reads results back from pod
 termination messages. It never mounts the store. **If the manager is down, scheduled runs pause**; when it
 returns it runs a missed slot once, not once per missed slot, and a policy turns `Healthy=False/Stale` if
 too long passes without a success.

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.3.0] - 2026-11-26
+
+### Added
+- Finished run Jobs now carry `ttlSecondsAfterFinished` (7 days). `pruneHistory` already caps finished runs by count
+  (3 per role and outcome), but a count cap has no age bound: a nightly policy could hold finished Jobs, pods and
+  scratch ephemeral PVCs for months. The age bound only tightens cleanup (it never deletes anything the count cap
+  kept); the policy's status, `RESULT` and events keep the outcome no matter what happens to the Job.
+
 ## [1.2.3] - 2026-11-26
 
 ### Added
