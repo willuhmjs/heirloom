@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.1.0] - 2026-11-26
+
+### Added
+- **SMB stores.** A `BackupStore` can set `spec.smb` (`server`, `share`, `credentialsSecretRef`, optional
+  `mountOptions`) instead of `spec.nfs`; exactly one of the two is required. The share is mounted through
+  [csi-driver-smb](https://github.com/kubernetes-csi/csi-driver-smb) (`smb.csi.k8s.io`) with a static PV/PVC per
+  namespace, reclaim policy `Retain`. The chart gets `store.smb.*` values. NFS stores behave exactly as before.
+
 ## [1.0.0] - 2026-11-24
 
 ### Changed
