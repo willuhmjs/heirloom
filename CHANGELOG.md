@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.1.1] - 2026-11-26
+
+### Fixed
+- The release pipeline publishes the chart again (Helm 3 for the OCI push; Helm 4.3 fails against ghcr) and builds
+  each image architecture on a native runner with a layer cache instead of one emulated build. No code changes
+  since 1.1.0; 1.1.0's image exists but its OCI chart was never published, so use 1.1.1.
+
 ## [1.1.0] - 2026-11-26
 
 ### Added
