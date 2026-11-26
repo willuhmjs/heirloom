@@ -45,6 +45,79 @@ entries:
         - name: Restore runbooks
           url: https://github.com/willuhmjs/heirloom/blob/main/docs/RESTORE-RUNBOOKS.md
     apiVersion: v2
+    appVersion: 1.1.1
+    created: "2026-11-26T01:39:52.170161284Z"
+    description: Kubernetes-native backups that land as deduplicated restic repositories
+      on your NAS. App-consistent Postgres and SQLite dumps, GFS retention with prune,
+      restores that are tested.
+    digest: f1152ff7b0b51978b65c2864d5b27764513e7a5500fac867d2c91ee2e2ee599a
+    home: https://willuhmjs.github.io/heirloom/
+    icon: https://raw.githubusercontent.com/willuhmjs/heirloom/main/docs/assets/logo.svg
+    keywords:
+    - backup
+    - restore
+    - nfs
+    - smb
+    - postgres
+    - sqlite
+    - snapshots
+    - operator
+    - gitops
+    kubeVersion: '>=1.29.0-0'
+    maintainers:
+    - name: William Faircloth
+      url: https://github.com/willuhmjs
+    name: heirloom
+    sources:
+    - https://github.com/willuhmjs/heirloom
+    type: application
+    urls:
+    - https://github.com/willuhmjs/heirloom/releases/download/heirloom-1.1.1/heirloom-1.1.1.tgz
+    version: 1.1.1
+  - annotations:
+      artifacthub.io/category: storage
+      artifacthub.io/containsSecurityUpdates: "false"
+      artifacthub.io/crds: |
+        - kind: BackupStore
+          version: v1
+          name: backupstores.heirloom.io
+          displayName: Backup store
+          description: The NFS export or SMB share that receives the backups.
+        - kind: BackupPolicy
+          version: v1
+          name: backuppolicies.heirloom.io
+          displayName: Backup policy
+          description: What to back up (files, SQLite, Postgres), when, and how long to keep it.
+        - kind: Restore
+          version: v1
+          name: restores.heirloom.io
+          displayName: Restore
+          description: Restore a policy's data from a snapshot.
+      artifacthub.io/crdsExamples: |
+        - apiVersion: heirloom.io/v1
+          kind: BackupPolicy
+          metadata:
+            name: gitea-db
+            namespace: gitea
+          spec:
+            storeRef: nas
+            schedule: "0 * * * *"
+            source:
+              type: postgres
+              postgres:
+                image: postgres:16
+                host: postgres.gitea.svc
+                passwordSecretRef: {name: postgres, key: password}
+      artifacthub.io/images: |
+        - name: heirloom
+          image: ghcr.io/willuhmjs/heirloom:0.1.0
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: Documentation
+          url: https://github.com/willuhmjs/heirloom/blob/main/docs/REFERENCE.md
+        - name: Restore runbooks
+          url: https://github.com/willuhmjs/heirloom/blob/main/docs/RESTORE-RUNBOOKS.md
+    apiVersion: v2
     appVersion: 1.1.0
     created: "2026-11-26T01:28:58.307955423Z"
     description: Kubernetes-native backups that land as deduplicated restic repositories
@@ -146,4 +219,4 @@ entries:
     urls:
     - https://github.com/willuhmjs/heirloom/releases/download/heirloom-1.0.0/heirloom-1.0.0.tgz
     version: 1.0.0
-generated: "2026-11-26T01:28:58.307973096Z"
+generated: "2026-11-26T01:39:52.170179278Z"
