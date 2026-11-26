@@ -19,7 +19,7 @@ spec:
     server: 192.168.1.5
     share: k8s-backup
     credentialsSecretRef: {name: smb-creds, namespace: heirloom-system}
-    mountOptions: [vers=3.0, uid=0, gid=0, dir_mode=0700, file_mode=0600]
+    mountOptions: [vers=3.0, uid=0, gid=0, dir_mode=0700, file_mode=0600, nobrl]
   retention:
     hourly: 24
     daily: 30
