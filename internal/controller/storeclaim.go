@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,8 +56,11 @@ func storeNeedsClaim(store *v1.BackupStore) bool {
 func storePVSource(store *v1.BackupStore, name string) (corev1.PersistentVolumeSource, corev1.PersistentVolumeReclaimPolicy) {
 	if smb := store.Spec.SMB; smb != nil {
 		return corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{
-			Driver:             smbDriver,
-			VolumeHandle:       fmt.Sprintf("%s/%s#heirloom#%s", smb.Server, smb.Share, name),
+			Driver: smbDriver,
+			// Part of the handle is a hash of the mount options: the node plugin keeps one staged mount per handle
+			// and reuses it as long as it exists, so a PV recreated with new options under an unchanged handle
+			// would silently keep mounting with the old ones.
+			VolumeHandle:       fmt.Sprintf("%s/%s#heirloom#%s-%s", smb.Server, smb.Share, name, shortHash(strings.Join(smb.MountOptions, ","))),
 			VolumeAttributes:   map[string]string{"source": fmt.Sprintf("//%s/%s", smb.Server, smb.Share)},
 			NodeStageSecretRef: &corev1.SecretReference{Name: smb.CredentialsSecretRef.Name, Namespace: smb.CredentialsSecretRef.Namespace},
 		}}, corev1.PersistentVolumeReclaimRetain

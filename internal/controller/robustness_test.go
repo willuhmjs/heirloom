@@ -465,8 +465,14 @@ func TestSMBStoreAlwaysUsesStaticPV(t *testing.T) {
 	if ref := csi.NodeStageSecretRef; ref == nil || ref.Name != "smb-creds" || ref.Namespace != "heirloom-system" {
 		t.Errorf("nodeStageSecretRef = %+v", ref)
 	}
-	if !strings.HasSuffix(csi.VolumeHandle, "#"+name) {
+	if !strings.Contains(csi.VolumeHandle, "#"+name+"-") {
 		t.Errorf("volumeHandle %q must be unique per PV", csi.VolumeHandle)
+	}
+	changed := smbStore()
+	changed.Spec.SMB.MountOptions = append(changed.Spec.SMB.MountOptions, "nobrl")
+	other, _ := storePVSource(changed, name)
+	if other.CSI.VolumeHandle == csi.VolumeHandle {
+		t.Error("new mount options must change the volumeHandle, or the node plugin reuses its old staged mount")
 	}
 	if pv.Spec.NFS != nil || len(pv.Spec.MountOptions) != 2 || pv.Spec.MountOptions[0] != "vers=3.0" {
 		t.Errorf("pv = %+v", pv.Spec)

@@ -173,7 +173,9 @@ An SMB store always goes through the provisioned static PV/PVC pair (the driver 
 with `persistentVolumeReclaimPolicy: Retain` because csi-driver-smb does not delete statically provisioned volumes;
 heirloom deletes a released PV itself, and that never touches the share. Restic's local repository needs neither
 ownership nor symlinks on the share, so SMB works as a backend; a share that holds nothing else is still best.
-Recommended `mountOptions`: `vers=3.0`, `uid=0`, `gid=0`, `dir_mode=0700`, `file_mode=0600`. Unlike NFS, SMB
+Recommended `mountOptions`: `vers=3.0`, `uid=0`, `gid=0`, `dir_mode=0700`, `file_mode=0600`, and `nobrl`, which a
+`sqlite` source requires: it stages its copy on the store and CIFS byte-range locks otherwise fail with
+"database is locked". Unlike NFS, SMB
 authenticates a user, so the credentials in the Secret are the security boundary: restrict who can read it.
 
 ## Retention

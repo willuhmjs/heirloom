@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.2.1] - 2026-11-26
+
+### Fixed
+- An SMB store's volume handle now includes a hash of its mount options. csi-driver-smb keeps one staged mount per
+  handle, so recreating a PV with different options (for example adding `nobrl`) kept mounting with the old ones.
+- Docs: SQLite sources stage their copy on the store and need the `nobrl` mount option on SMB (CIFS byte-range
+  locks otherwise fail with "database is locked").
+
 ## [1.2.0] - 2026-11-26
 
 ### Added
