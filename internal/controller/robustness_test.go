@@ -437,6 +437,61 @@ func TestStoreClaimMountOptionsDriftIsReported(t *testing.T) {
 	}
 }
 
+func smbStore() *v1.BackupStore {
+	return &v1.BackupStore{
+		ObjectMeta: metav1.ObjectMeta{Name: "smb"},
+		Spec: v1.BackupStoreSpec{SMB: &v1.SMBSpec{
+			Server:               "10.0.0.3",
+			Share:                "k8s-backup",
+			CredentialsSecretRef: v1.SecretRef{Name: "smb-creds", Namespace: "heirloom-system"},
+			MountOptions:         []string{"vers=3.0", "uid=0"},
+		}},
+	}
+}
+
+func TestSMBStoreAlwaysUsesStaticPV(t *testing.T) {
+	p := policyDue(filesPolicy())
+	p.Spec.StoreRef = "smb"
+	c := newFake(t, smbStore(), p)
+	r := newPolicyReconciler(c)
+	reconcileKey(t, r, "apps", "app")
+
+	name := storeClaimName("apps", "smb")
+	pv := getStorePV(t, c, name)
+	csi := pv.Spec.CSI
+	if csi == nil || csi.Driver != "smb.csi.k8s.io" || csi.VolumeAttributes["source"] != "//10.0.0.3/k8s-backup" {
+		t.Fatalf("pv csi = %+v", csi)
+	}
+	if ref := csi.NodeStageSecretRef; ref == nil || ref.Name != "smb-creds" || ref.Namespace != "heirloom-system" {
+		t.Errorf("nodeStageSecretRef = %+v", ref)
+	}
+	if !strings.HasSuffix(csi.VolumeHandle, "#"+name) {
+		t.Errorf("volumeHandle %q must be unique per PV", csi.VolumeHandle)
+	}
+	if pv.Spec.NFS != nil || len(pv.Spec.MountOptions) != 2 || pv.Spec.MountOptions[0] != "vers=3.0" {
+		t.Errorf("pv = %+v", pv.Spec)
+	}
+	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("reclaim policy = %s, want Retain (csi-driver-smb does not delete static volumes)", pv.Spec.PersistentVolumeReclaimPolicy)
+	}
+	pod := jobForPolicy(t, c, "app", jobcfg.ModeBackup).Spec.Template.Spec
+	if v := volume(pod, volStore); v == nil || v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != name {
+		t.Errorf("store volume = %+v, want claim %s", v, name)
+	}
+}
+
+func TestSMBStoreWithoutMountOptionsStillUsesStaticPV(t *testing.T) {
+	store := smbStore()
+	store.Spec.SMB.MountOptions = nil
+	p := policyDue(filesPolicy())
+	p.Spec.StoreRef = "smb"
+	c := newFake(t, store, p)
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	if pv := getStorePV(t, c, storeClaimName("apps", "smb")); pv.Spec.CSI == nil {
+		t.Errorf("pv = %+v, want a CSI volume", pv.Spec)
+	}
+}
+
 func TestNoStoreClaimWithoutMountOptions(t *testing.T) {
 	c := newFake(t, testStore(), policyDue(filesPolicy()))
 	r := newPolicyReconciler(c)

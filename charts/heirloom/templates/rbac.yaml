@@ -24,8 +24,8 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     verbs: [get, create, patch]
-  # A store with mountOptions is mounted through a provisioned static PV/PVC (inline NFS volumes
-  # cannot carry mount options); the PV is only a pointer at the export, never a data deleter.
+  # A store with mountOptions, or an SMB share, is mounted through a provisioned static PV/PVC (inline NFS
+  # volumes cannot carry mount options); the PV is only a pointer at the export, never a data deleter.
   - apiGroups: [""]
     resources: [persistentvolumes]
     verbs: [get, list, create, delete]

@@ -13,6 +13,7 @@ keywords:
   - backup
   - restore
   - nfs
+  - smb
   - postgres
   - sqlite
   - snapshots
@@ -30,7 +31,7 @@ annotations:
       version: v1
       name: backupstores.heirloom.io
       displayName: Backup store
-      description: The NFS export that receives the backups.
+      description: The NFS export or SMB share that receives the backups.
     - kind: BackupPolicy
       version: v1
       name: backuppolicies.heirloom.io

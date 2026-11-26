@@ -5,7 +5,13 @@ changes, apply them by hand:  kubectl apply -f charts/heirloom/crds/
 
 {{- if .Values.store.create }}
 
+{{- if .Values.store.smb.server }}
+
+BackupStore "{{ .Values.store.name }}" points at //{{ .Values.store.smb.server }}/{{ .Values.store.smb.share }} (needs csi-driver-smb).
+{{- else }}
+
 BackupStore "{{ .Values.store.name }}" points at {{ .Values.store.nfs.server }}:{{ .Values.store.nfs.path }}.
+{{- end }}
 {{- else }}
 
 No BackupStore was created. Create one (cluster-scoped), e.g.:

@@ -44,7 +44,7 @@ func newFake(t *testing.T, objs ...client.Object) client.Client {
 func testStore() *v1.BackupStore {
 	return &v1.BackupStore{
 		ObjectMeta: metav1.ObjectMeta{Name: "nas"},
-		Spec:       v1.BackupStoreSpec{NFS: v1.NFSSpec{Server: "10.0.0.2", Path: "/volume1/k8s"}},
+		Spec:       v1.BackupStoreSpec{NFS: &v1.NFSSpec{Server: "10.0.0.2", Path: "/volume1/k8s"}},
 	}
 }
 

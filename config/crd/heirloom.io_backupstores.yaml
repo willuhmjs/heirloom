@@ -21,6 +21,14 @@ spec:
     - jsonPath: .spec.nfs.path
       name: Path
       type: string
+    - jsonPath: .spec.smb.server
+      name: SMB Server
+      priority: 1
+      type: string
+    - jsonPath: .spec.smb.share
+      name: SMB Share
+      priority: 1
+      type: string
     name: v1
     schema:
       openAPIV3Schema:
@@ -43,7 +51,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: BackupStoreSpec describes where backups live.
+            description: BackupStoreSpec describes where backups live. Set exactly
+              one of nfs or smb.
             properties:
               nfs:
                 description: NFSSpec points at an NFS export that receives the restic
@@ -97,9 +106,53 @@ spec:
                   rule: '(has(self.hourly) ? self.hourly : 0) + (has(self.daily) ?
                     self.daily : 0) + (has(self.weekly) ? self.weekly : 0) + (has(self.monthly)
                     ? self.monthly : 0) > 0'
-            required:
-            - nfs
+              smb:
+                description: |-
+                  SMBSpec points at an SMB/CIFS share that receives the restic repositories. The share is mounted by the
+                  csi-driver-smb CSI driver (smb.csi.k8s.io), which must be installed in the cluster.
+                properties:
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names a Secret holding the keys username and password (and optionally domain), as
+                      csi-driver-smb expects. The kubelet and the CSI driver read it, not the operator.
+                    properties:
+                      name:
+                        minLength: 1
+                        type: string
+                      namespace:
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  mountOptions:
+                    description: |-
+                      MountOptions are passed verbatim to the CIFS mount on mover pods, e.g. ["vers=3.0", "uid=0", "gid=0",
+                      "dir_mode=0700", "file_mode=0600"]. Without them the driver's defaults apply.
+                    items:
+                      pattern: ^[A-Za-z0-9,.:=/_-]+$
+                      type: string
+                    maxItems: 20
+                    type: array
+                  server:
+                    description: Server is the host name or address of the SMB server.
+                    minLength: 1
+                    type: string
+                  share:
+                    description: Share is the name of the share on the server, without
+                      slashes, e.g. k8s-backup.
+                    pattern: ^[^/\\]+$
+                    type: string
+                required:
+                - credentialsSecretRef
+                - server
+                - share
+                type: object
             type: object
+            x-kubernetes-validations:
+            - message: set exactly one of nfs or smb
+              rule: has(self.nfs) != has(self.smb)
         required:
         - spec
         type: object
