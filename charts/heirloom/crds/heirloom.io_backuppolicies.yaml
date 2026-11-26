@@ -29,11 +29,30 @@ spec:
     - jsonPath: .status.snapshotsKept
       name: Snapshots
       type: integer
+    - jsonPath: .status.repoSize
+      name: Size
+      type: string
+    - jsonPath: .status.lastAdded
+      name: Added
+      type: string
+    - jsonPath: .status.lastSyncDuration
+      name: Took
+      type: string
+    - jsonPath: .status.store
+      name: Store
+      type: string
+    - jsonPath: .status.encrypted
+      name: Encrypted
+      type: boolean
     - jsonPath: .status.lastVerify.ok
       name: Verified
       type: string
     - jsonPath: .status.conditions[?(@.type=="Healthy")].status
       name: Healthy
+      type: string
+    - jsonPath: .status.lastMessage
+      name: Result
+      priority: 1
       type: string
     name: v1
     schema:
@@ -552,7 +571,18 @@ spec:
                   - type
                   type: object
                 type: array
+              encrypted:
+                type: boolean
+              lastAdded:
+                description: |-
+                  LastAdded is what the newest successful backup added to the repository after deduplication, and RepoSize the
+                  repository's total size after that run (restic raw data), both human readable.
+                type: string
               lastManualSync:
+                type: string
+              lastMessage:
+                description: LastMessage is the one-line result of the newest finished
+                  backup, whether it succeeded or failed.
                 type: string
               lastScheduleTime:
                 description: |-
@@ -608,11 +638,17 @@ spec:
               nextSyncTime:
                 format: date-time
                 type: string
+              repoSize:
+                type: string
               snapshotsKept:
                 description: SnapshotsKept is the number of snapshots retained after
                   the last run.
                 format: int32
                 type: integer
+              store:
+                description: Store is the BackupStore the policy writes to, and Encrypted
+                  whether its repositories carry a password.
+                type: string
             type: object
         required:
         - spec

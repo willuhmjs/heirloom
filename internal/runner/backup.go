@@ -67,6 +67,7 @@ func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
 	}
 	res.Snapshot = shortResticID(sum.SnapshotID)
 	res.Files, res.Bytes = sum.TotalFilesProcessed, sum.TotalBytesProcessed
+	res.Added = sum.DataAddedPacked
 
 	// The snapshot is committed now, so housekeeping problems must not fail the run (the Job would be
 	// retried and back everything up again); they are reported in the message and retried by the next run.
@@ -78,6 +79,7 @@ func (r *runner) backup(ctx context.Context, res *jobcfg.Result) error {
 		warnings = append(warnings, "forget failed: "+err.Error())
 	}
 	r.logf("retention: kept %d, pruned %d", kept, pruned)
+	res.RepoBytes = r.resticRepoBytes(ctx) // best effort: a status nicety, never a reason to fail the run
 	res.Message = fmt.Sprintf("restic snapshot %s: %d files, %s processed, %s added to repository; kept %d, pruned %d",
 		res.Snapshot, res.Files, humanBytes(res.Bytes), humanBytes(sum.DataAddedPacked), kept, pruned)
 	if len(warnings) > 0 {

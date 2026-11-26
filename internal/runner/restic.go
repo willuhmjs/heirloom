@@ -68,6 +68,22 @@ func (r *runner) resticRun(ctx context.Context, dir string, args ...string) (str
 	return out, err
 }
 
+// resticRepoBytes is the repository's raw data size from `restic stats`, or 0 when it cannot be read.
+func (r *runner) resticRepoBytes(ctx context.Context) int64 {
+	out, err := r.resticRun(ctx, "", "stats", "--mode", "raw-data", "--json")
+	if err != nil {
+		r.logf("WARNING: repository size: %v", err)
+		return 0
+	}
+	var st struct {
+		TotalSize int64 `json:"total_size"`
+	}
+	if json.Unmarshal([]byte(out), &st) != nil {
+		return 0
+	}
+	return st.TotalSize
+}
+
 // resticSummary is the message_type=summary object restic backup prints with --json, and the summary each
 // entry of `restic snapshots --json` carries. Only the fields heirloom reads are declared.
 type resticSummary struct {

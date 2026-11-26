@@ -343,6 +343,15 @@ type BackupPolicyStatus struct {
 	LastSyncDuration       *metav1.Duration `json:"lastSyncDuration,omitempty"`
 	NextSyncTime           *metav1.Time     `json:"nextSyncTime,omitempty"`
 	LastManualSync         string           `json:"lastManualSync,omitempty"`
+	// Store is the BackupStore the policy writes to, and Encrypted whether its repositories carry a password.
+	Store     string `json:"store,omitempty"`
+	Encrypted bool   `json:"encrypted,omitempty"`
+	// LastMessage is the one-line result of the newest finished backup, whether it succeeded or failed.
+	LastMessage string `json:"lastMessage,omitempty"`
+	// LastAdded is what the newest successful backup added to the repository after deduplication, and RepoSize the
+	// repository's total size after that run (restic raw data), both human readable.
+	LastAdded string `json:"lastAdded,omitempty"`
+	RepoSize  string `json:"repoSize,omitempty"`
 	// SnapshotsKept is the number of snapshots retained after the last run.
 	SnapshotsKept int32         `json:"snapshotsKept,omitempty"`
 	LastVerify    *VerifyStatus `json:"lastVerify,omitempty"`
@@ -358,8 +367,14 @@ type BackupPolicyStatus struct {
 // +kubebuilder:printcolumn:name="Schedule",type=string,JSONPath=`.spec.schedule`
 // +kubebuilder:printcolumn:name="Last",type=date,JSONPath=`.status.lastSyncTime`
 // +kubebuilder:printcolumn:name="Snapshots",type=integer,JSONPath=`.status.snapshotsKept`
+// +kubebuilder:printcolumn:name="Size",type=string,JSONPath=`.status.repoSize`
+// +kubebuilder:printcolumn:name="Added",type=string,JSONPath=`.status.lastAdded`
+// +kubebuilder:printcolumn:name="Took",type=string,JSONPath=`.status.lastSyncDuration`
+// +kubebuilder:printcolumn:name="Store",type=string,JSONPath=`.status.store`
+// +kubebuilder:printcolumn:name="Encrypted",type=boolean,JSONPath=`.status.encrypted`
 // +kubebuilder:printcolumn:name="Verified",type=string,JSONPath=`.status.lastVerify.ok`
 // +kubebuilder:printcolumn:name="Healthy",type=string,JSONPath=`.status.conditions[?(@.type=="Healthy")].status`
+// +kubebuilder:printcolumn:name="Result",type=string,priority=1,JSONPath=`.status.lastMessage`
 type BackupPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

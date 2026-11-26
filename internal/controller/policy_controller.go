@@ -129,6 +129,7 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1.BackupPolicy) er
 		}
 		return err
 	}
+	p.Status.Store, p.Status.Encrypted = store.Name, storeEncrypted(&store)
 	jobs, pods, err := r.observe(ctx, p)
 	if err != nil {
 		return err
