@@ -14,7 +14,7 @@ Only the latest release is supported. The API is `v1`.
 
 The full text is in [`docs/REFERENCE.md`](docs/REFERENCE.md#security). In short:
 
-- **Backups are plaintext, on purpose.** The NFS export is the security boundary. Limit it to your node IPs and
+- **Backups are plaintext unless the store sets `spec.encryption`** (restic encryption, a per-policy key derived from one master password you must keep outside the cluster). The NFS export is the security boundary. Limit it to your node IPs and
   give it no other writers. Anyone who can read the export can read every secret in every backed-up volume;
   anyone who can write to it can plant files and database dumps that a restore will load as root.
 - **Namespace isolation.** Whoever can create `BackupPolicy` or `Restore` objects in a namespace is trusted like an

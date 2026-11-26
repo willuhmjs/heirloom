@@ -64,6 +64,27 @@ type SMBSpec struct {
 	MountOptions []string `json:"mountOptions,omitempty"`
 }
 
+// SecretKeyRef names one key of a Secret in any namespace.
+type SecretKeyRef struct {
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+	// +kubebuilder:default=password
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
+// EncryptionSpec turns on restic's own repository encryption for every policy that uses the store.
+type EncryptionSpec struct {
+	// PasswordSecretRef names the Secret holding the store's master password. The operator reads it (so it must
+	// live in the operator's namespace) and never hands it to a mover: each policy's repository gets its own
+	// password, HMAC-SHA256(master, "heirloom/v1/<namespace>/<policy>") in hex, copied into a Secret in the
+	// policy's namespace. A tenant therefore only ever holds the key to its own repository.
+	// Changing the master later makes every existing repository unreadable: restic cannot rekey from here.
+	PasswordSecretRef SecretKeyRef `json:"passwordSecretRef"`
+}
+
 // BackupStoreSpec describes where backups live. Set exactly one of nfs or smb.
 // +kubebuilder:validation:XValidation:rule="has(self.nfs) != has(self.smb)",message="set exactly one of nfs or smb"
 type BackupStoreSpec struct {
@@ -71,6 +92,12 @@ type BackupStoreSpec struct {
 	NFS *NFSSpec `json:"nfs,omitempty"`
 	// +optional
 	SMB *SMBSpec `json:"smb,omitempty"`
+	// Encryption encrypts the restic repositories. Without it they are passwordless (restic
+	// --insecure-no-password) and the storage's access control is the only protection.
+	// Existing passwordless repositories cannot be opened by an encrypted store (and vice versa): start from
+	// empty policy folders, or migrate with `restic copy`.
+	// +optional
+	Encryption *EncryptionSpec `json:"encryption,omitempty"`
 	// Retention applied to policies that do not set their own.
 	// Defaults to hourly=24 daily=30 weekly=12 monthly=24.
 	// +optional

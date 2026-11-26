@@ -30,6 +30,13 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
   {{- end }}
+  {{- if .Values.store.encryption.passwordSecret }}
+  encryption:
+    passwordSecretRef:
+      name: {{ .Values.store.encryption.passwordSecret | quote }}
+      namespace: {{ .Release.Namespace | quote }}
+      key: {{ .Values.store.encryption.passwordKey | default "password" | quote }}
+  {{- end }}
   {{- with .Values.store.retention }}
   retention:
     {{- toYaml . | nindent 4 }}

@@ -65,5 +65,10 @@ store:
     credentialsSecretNamespace: ""   # defaults to the release namespace
     # Passed verbatim to the CIFS mount, e.g. ["vers=3.0", "uid=0", "gid=0", "dir_mode=0700", "file_mode=0600"].
     mountOptions: []
+  # Encrypt the restic repositories. Name a Secret in the release namespace holding the master password
+  # (never rotate it: existing repositories become unreadable). Each policy gets its own derived key.
+  encryption:
+    passwordSecret: ""
+    passwordKey: password
   # Defaults when omitted: hourly=24 daily=30 weekly=12 monthly=24
   retention: {}

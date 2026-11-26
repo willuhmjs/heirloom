@@ -610,6 +610,11 @@ func (r *RestoreReconciler) createJob(ctx context.Context, rs *v1.Restore) error
 	} else if msg != "" {
 		return fmt.Errorf("store claim: %s", msg)
 	}
+	if ready, msg, err := ensureRepoKey(ctx, r.Client, r.Reader, r.Scheme, p, store); err != nil {
+		return err
+	} else if !ready {
+		return fmt.Errorf("repository key: %s", msg)
+	}
 	job, err := r.restoreJob(rs, p, store)
 	if err != nil {
 		r.fail(rs, err.Error())

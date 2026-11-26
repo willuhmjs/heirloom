@@ -600,3 +600,66 @@ func TestResticPostgresStagesAndCommitsDumps(t *testing.T) {
 		t.Errorf("staged globals dump = %q", got)
 	}
 }
+
+// An encrypted store's repository must really be encrypted: a plain backup that works with the right password
+// cannot be opened passwordless, and a run with the password missing must fail instead of falling back.
+func TestResticEncryptedRepository(t *testing.T) {
+	r, src := newResticRunner(t, snapshot.Retention{Hourly: 24})
+	r.cfg.Encrypted = true
+	ctx := context.Background()
+	write(t, filepath.Join(src, "secret.txt"), "top secret plaintext marker\n")
+
+	t.Setenv(jobcfg.EnvRepoPassword, "")
+	if res := r.execute(ctx); res.OK || !strings.Contains(res.Message, jobcfg.EnvRepoPassword) {
+		t.Fatalf("without a password the run must fail loudly, got %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(r.resticRepo(), "config")); err == nil {
+		t.Fatal("a repository was created without a password")
+	}
+
+	t.Setenv(jobcfg.EnvRepoPassword, "correct horse")
+	var res jobcfg.Result
+	if err := r.backup(ctx, &res); err != nil {
+		t.Fatalf("encrypted backup: %v", err)
+	}
+	if res.Snapshot == "" {
+		t.Errorf("res = %+v", res)
+	}
+	// No file in the repository holds the plaintext.
+	_ = filepath.WalkDir(r.resticRepo(), func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if b, _ := os.ReadFile(p); bytes.Contains(b, []byte("plaintext marker")) {
+				t.Errorf("%s holds the plaintext", p)
+			}
+		}
+		return nil
+	})
+	// The plain flags cannot open it, and a wrong password cannot either.
+	if out, err := exec.Command("restic", "--repo", r.resticRepo(), "--insecure-no-password", "snapshots").CombinedOutput(); err == nil {
+		t.Errorf("opened an encrypted repository without a password: %s", out)
+	}
+	t.Setenv(jobcfg.EnvRepoPassword, "wrong")
+	if err := r.backup(ctx, &jobcfg.Result{}); err == nil {
+		t.Error("a wrong password must not open the repository")
+	}
+}
+
+func TestPlainRepositoryKeepsInsecureFlag(t *testing.T) {
+	r, _ := newResticRunner(t, snapshot.Retention{Hourly: 1})
+	if !slicesContains(r.resticBase(), "--insecure-no-password") {
+		t.Errorf("plain store lost --insecure-no-password: %v", r.resticBase())
+	}
+	r.cfg.Encrypted = true
+	if slicesContains(r.resticBase(), "--insecure-no-password") {
+		t.Errorf("encrypted store must not pass --insecure-no-password: %v", r.resticBase())
+	}
+}
+
+func slicesContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

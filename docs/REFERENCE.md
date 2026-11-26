@@ -116,6 +116,44 @@ you no longer need them.
 
 Nodes need an NFS client (`nfs-common` / `nfs-utils`).
 
+### Encryption
+
+By default the restic repositories are passwordless (`--insecure-no-password`). Set `spec.encryption` on a
+`BackupStore` (chart: `store.encryption.passwordSecret`) to encrypt them with restic's own encryption instead.
+
+1. Create the master password in the operator's namespace without ever printing it, and keep a copy off the cluster:
+
+   ```sh
+   pw=$(openssl rand -base64 48)
+   printf '%s' "$pw" | pbcopy          # paste into your password manager now; macOS. Linux: xclip -selection clipboard
+   kubectl create secret generic heirloom-master-password -n heirloom-system --from-literal=password="$pw"
+   unset pw
+   ```
+
+   (GitOps: pipe `kubectl create secret ... --dry-run=client -o yaml` through `sops --encrypt` instead.)
+2. Reference it from the store (see `examples/store-encrypted.yaml`).
+
+The operator reads the master password and never gives it to a mover. For each policy it derives a password,
+`hex(HMAC-SHA256(master, "heirloom/v1/<namespace>/<policy>"))`, stores it in a Secret named
+`heirloom-repo-key-<hash>` in the policy's namespace (create-only, owned by the policy) and passes that to the
+mover as `RESTIC_PASSWORD`. A tenant can read only its own repository's password. A run never falls back to a
+passwordless repository: if the password is missing the policy shows `Ready=False/EncryptionKeyPending` or the
+mover fails.
+
+- **Existing repositories do not convert.** A passwordless repository cannot be opened with a password and the
+  other way round. Start from empty `<namespace>/<policy>/restic` folders, or copy history across with
+  `restic copy`.
+- **Never change the master password.** Every repository would become unreadable.
+- **Back up the master password outside the cluster.** Without it the backups cannot be opened, whatever else
+  survives. To open a repository by hand:
+
+  ```sh
+  export RESTIC_PASSWORD=$(printf 'heirloom/v1/NAMESPACE/POLICY' | openssl dgst -sha256 -hmac "$MASTER" -hex | awk '{print $NF}')
+  restic -r /mnt/backups/NAMESPACE/POLICY/restic snapshots
+  ```
+- RBAC: the operator gets `create` on Secrets cluster-wide (never get/list/update) and `get` on Secrets in its own
+  namespace only, which is why the master Secret must live there.
+
 ### SMB instead of NFS
 
 A `BackupStore` can point at an SMB/CIFS share instead (set exactly one of `spec.nfs` or `spec.smb`). The share is

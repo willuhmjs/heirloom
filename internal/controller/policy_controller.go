@@ -139,6 +139,12 @@ func (r *PolicyReconciler) reconcile(ctx context.Context, p *v1.BackupPolicy) er
 		setReady(p, false, "StoreClaimPending", msg)
 		return nil
 	}
+	if ready, msg, err := ensureRepoKey(ctx, r.Client, r.Reader, r.Scheme, p, &store); err != nil {
+		return err
+	} else if !ready {
+		setReady(p, false, "EncryptionKeyPending", msg)
+		return nil
+	}
 	restoring, err := r.restoreActive(ctx, p)
 	if err != nil {
 		return err

@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The API is `v1`: changes follow semver, and breaking
 API changes only come with a new major version.
 
+## [1.2.0] - 2026-11-26
+
+### Added
+- **Repository encryption.** `BackupStore.spec.encryption.passwordSecretRef` (chart: `store.encryption.*`) encrypts
+  the restic repositories. The operator reads one master password from its own namespace and derives a separate
+  password per policy (`HMAC-SHA256(master, "heirloom/v1/<ns>/<policy>")`), stored in a create-only Secret in the
+  policy's namespace, so a tenant only holds its own repository's key. A run never falls back to a passwordless
+  repository. Existing passwordless repositories do not convert. New RBAC: `create` on Secrets cluster-wide and
+  `get` on Secrets in the operator's namespace only.
+
 ## [1.1.1] - 2026-11-26
 
 ### Fixed

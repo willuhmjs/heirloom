@@ -32,7 +32,9 @@ nas:/k8s-backup/gitea/gitea-db/restic/       <- the same, for the database
 ```
 
 The repositories are unencrypted and passwordless (`restic --insecure-no-password`) on purpose: no password to lose
-on the worst day of the year. The NFS export's ACL remains the security boundary, same as before.
+on the worst day of the year. The NFS export's ACL remains the security boundary, same as before. Want them
+encrypted instead? Set `spec.encryption` on the store ([docs](docs/REFERENCE.md#encryption)); each policy gets its own
+derived password and you keep the master off the cluster.
 
 ## Why you might want it
 

@@ -60,6 +60,11 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch]
+  # A store with spec.encryption: each policy's derived repository password is created as a Secret in the
+  # policy's namespace. Create only: heirloom never reads, lists or rewrites Secrets outside its own namespace.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
   # Restore scales workloads down and up; read uncached with get, changed with a merge patch of replicas and annotations.
   - apiGroups: [apps]
     resources: [deployments, statefulsets]
@@ -106,6 +111,35 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "heirloom.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "heirloom.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The master encryption password (and nothing else) is read from the operator's own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "heirloom.fullname" . }}-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heirloom.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "heirloom.fullname" . }}-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heirloom.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "heirloom.fullname" . }}-secrets
 subjects:
   - kind: ServiceAccount
     name: {{ include "heirloom.fullname" . }}
