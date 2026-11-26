@@ -94,6 +94,7 @@ func (m moverPod) podSpec() (corev1.PodSpec, error) {
 		Spec:      m.spec,
 		Retention: resolveRetention(m.spec.Retention, m.store),
 		Restore:   m.restore,
+		Encrypted: storeEncrypted(m.store),
 	}
 	encoded, err := cfg.Encode()
 	if err != nil {
@@ -150,6 +151,15 @@ func (m moverPod) moverContainer(encodedConfig string) corev1.Container {
 		env = append(env, corev1.EnvVar{
 			Name:      "PGPASSWORD",
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: pg.PasswordSecretRef.DeepCopy()},
+		})
+	}
+	if storeEncrypted(m.store) {
+		env = append(env, corev1.EnvVar{
+			Name: jobcfg.EnvRepoPassword,
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: repoKeySecretName(m.namespace, m.policy)},
+				Key:                  jobcfg.KeySecretKey,
+			}},
 		})
 	}
 	mounts := []corev1.VolumeMount{

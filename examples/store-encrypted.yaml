@@ -1,0 +1,12 @@
+# Encrypted restic repositories. The master password lives in a Secret in the operator's namespace;
+# create it without ever displaying it (see docs/REFERENCE.md#encryption) and keep a copy OUTSIDE the cluster.
+apiVersion: heirloom.io/v1
+kind: BackupStore
+metadata:
+  name: default
+spec:
+  nfs:
+    server: 192.168.1.5
+    path: /volume1/k8s-backup
+  encryption:
+    passwordSecretRef: {name: heirloom-master-password, namespace: heirloom-system, key: password}

@@ -52,7 +52,10 @@ func (r *runner) resticRepo() string { return filepath.Join(r.policyDir, resticD
 // The chunk index cache is large and regenerable, so it lives on the pod's scratch volume instead of
 // filling the node's root disk; without a scratch mount --no-cache is safer than writing to the node.
 func (r *runner) resticBase() []string {
-	base := []string{"--repo", r.resticRepo(), "--insecure-no-password"}
+	base := []string{"--repo", r.resticRepo()}
+	if !r.cfg.Encrypted {
+		base = append(base, "--insecure-no-password")
+	}
 	if fi, err := os.Stat(r.scratch); err == nil && fi.IsDir() {
 		return append(base, "--cache-dir", filepath.Join(r.scratch, "restic-cache"))
 	}

@@ -75,15 +75,12 @@ func (r *runner) execute(ctx context.Context) jobcfg.Result {
 	start := r.now()
 	res := jobcfg.Result{Mode: r.cfg.Mode, Time: start}
 	var err error
-	switch r.cfg.Mode {
-	case jobcfg.ModeBackup:
-		err = r.backup(ctx, &res)
-	case jobcfg.ModeVerify:
-		err = r.verify(ctx, &res)
-	case jobcfg.ModeRestore:
-		err = r.restore(ctx, &res)
+	switch {
+	case r.cfg.Encrypted && os.Getenv(jobcfg.EnvRepoPassword) == "":
+		// Never fall back to a passwordless repository: that would silently store the data unencrypted.
+		err = fmt.Errorf("the store is encrypted but %s is empty", jobcfg.EnvRepoPassword)
 	default:
-		err = fmt.Errorf("unknown mode %q", r.cfg.Mode)
+		err = r.dispatch(ctx, &res)
 	}
 	res.Duration = r.now().Sub(start).Seconds()
 	res.OK = err == nil
@@ -94,6 +91,21 @@ func (r *runner) execute(ctx context.Context) jobcfg.Result {
 		r.logf("OK: %s", res.Message)
 	}
 	return res
+}
+
+func (r *runner) dispatch(ctx context.Context, res *jobcfg.Result) error {
+	var err error
+	switch r.cfg.Mode {
+	case jobcfg.ModeBackup:
+		err = r.backup(ctx, res)
+	case jobcfg.ModeVerify:
+		err = r.verify(ctx, res)
+	case jobcfg.ModeRestore:
+		err = r.restore(ctx, res)
+	default:
+		err = fmt.Errorf("unknown mode %q", r.cfg.Mode)
+	}
+	return err
 }
 
 // writeResult stores the result as JSON; the kubelet limits the termination message to 4096 bytes.

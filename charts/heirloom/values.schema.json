@@ -115,6 +115,17 @@
             }
           }
         },
+        "encryption": {
+          "type": "object",
+          "properties": {
+            "passwordSecret": {
+              "type": "string"
+            },
+            "passwordKey": {
+              "type": "string"
+            }
+          }
+        },
         "smb": {
           "type": "object",
           "properties": {

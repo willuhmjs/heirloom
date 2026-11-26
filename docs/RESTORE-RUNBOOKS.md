@@ -1,5 +1,8 @@
 # Restore runbooks
 
+> **Encrypted store?** Replace `--insecure-no-password` below with `RESTIC_PASSWORD` set to the policy's derived
+> password (`docs/REFERENCE.md#encryption`).
+
 Every procedure has two forms: the `Restore` CR, and by hand with an NFS client plus the restic binary.
 Backups are restic repositories at `<store>/<namespace>/<policy>/restic/`, so every by-hand command
 below needs `--insecure-no-password`, and snapshots are restic hex ids (find them with

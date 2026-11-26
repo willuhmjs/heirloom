@@ -534,3 +534,85 @@ func TestMoverDefaultResourceRequests(t *testing.T) {
 		t.Errorf("missing memory request must default to 512Mi, got %+v", res.Requests)
 	}
 }
+
+// --- store encryption: per-policy derived repository passwords ----------------------
+
+func encryptedStore() *v1.BackupStore {
+	s := testStore()
+	s.Spec.Encryption = &v1.EncryptionSpec{PasswordSecretRef: v1.SecretKeyRef{Name: "master", Namespace: "heirloom-system", Key: "password"}}
+	return s
+}
+
+func masterSecret(pw string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master", Namespace: "heirloom-system"},
+		Data:       map[string][]byte{"password": []byte(pw)},
+	}
+}
+
+func TestDerivePasswordIsStableAndPerPolicy(t *testing.T) {
+	// openssl: printf 'heirloom/v1/apps/app' | openssl dgst -sha256 -hmac master -hex
+	const want = "4b72ad8e56940d20c91f40c23aef6e093933842fd258d4b7a8b632b1178121a3"
+	if got := DerivePassword([]byte("master"), "apps", "app"); got != want {
+		t.Errorf("derive = %s, want %s (the runbook documents this exact derivation)", got, want)
+	}
+	if DerivePassword([]byte("master"), "apps", "app") == DerivePassword([]byte("master"), "apps", "app2") ||
+		DerivePassword([]byte("master"), "apps", "app") == DerivePassword([]byte("master"), "other", "app") {
+		t.Error("two policies share a repository password")
+	}
+}
+
+func TestEncryptedStoreGetsDerivedKeySecretAndEnv(t *testing.T) {
+	c := newFake(t, encryptedStore(), masterSecret("master"), policyDue(filesPolicy()))
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+
+	var sec corev1.Secret
+	mustGet(t, c, "apps", repoKeySecretName("apps", "app"), &sec)
+	if got := string(sec.Data["password"]) + sec.StringData["password"]; got != DerivePassword([]byte("master"), "apps", "app") {
+		t.Errorf("derived secret = %q", got)
+	}
+	if len(sec.OwnerReferences) != 1 {
+		t.Errorf("owners = %+v, want the policy so it is garbage-collected with it", sec.OwnerReferences)
+	}
+	job := jobForPolicy(t, c, "app", jobcfg.ModeBackup)
+	var found bool
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == jobcfg.EnvRepoPassword {
+			found = true
+			if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef.Name != repoKeySecretName("apps", "app") {
+				t.Errorf("password env must be a secretKeyRef to the derived secret, never a literal: %+v", e)
+			}
+		}
+		if e.Name == jobcfg.EnvConfig && !strings.Contains(e.Value, `"encrypted":true`) {
+			t.Errorf("config does not mark the run encrypted: %s", e.Value)
+		}
+	}
+	if !found {
+		t.Error("mover has no RESTIC_PASSWORD")
+	}
+}
+
+func TestEncryptedStoreWaitsForMasterSecret(t *testing.T) {
+	c := newFake(t, encryptedStore(), policyDue(filesPolicy()))
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	var p v1.BackupPolicy
+	mustGet(t, c, "apps", "app", &p)
+	cond := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "EncryptionKeyPending" {
+		t.Errorf("Ready = %+v, want EncryptionKeyPending", cond)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs); err != nil || len(jobs.Items) != 0 {
+		t.Errorf("a run started without its password: %v %d", err, len(jobs.Items))
+	}
+}
+
+func TestPlainStoreHasNoPasswordEnv(t *testing.T) {
+	c := newFake(t, testStore(), policyDue(filesPolicy()))
+	reconcileKey(t, newPolicyReconciler(c), "apps", "app")
+	for _, e := range onlyJob(t, c, jobcfg.ModeBackup).Spec.Template.Spec.Containers[0].Env {
+		if e.Name == jobcfg.EnvRepoPassword {
+			t.Errorf("plain store mover carries %s", e.Name)
+		}
+	}
+}

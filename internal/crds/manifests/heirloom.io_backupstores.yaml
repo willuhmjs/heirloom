@@ -54,6 +54,37 @@ spec:
             description: BackupStoreSpec describes where backups live. Set exactly
               one of nfs or smb.
             properties:
+              encryption:
+                description: |-
+                  Encryption encrypts the restic repositories. Without it they are passwordless (restic
+                  --insecure-no-password) and the storage's access control is the only protection.
+                  Existing passwordless repositories cannot be opened by an encrypted store (and vice versa): start from
+                  empty policy folders, or migrate with `restic copy`.
+                properties:
+                  passwordSecretRef:
+                    description: |-
+                      PasswordSecretRef names the Secret holding the store's master password. The operator reads it (so it must
+                      live in the operator's namespace) and never hands it to a mover: each policy's repository gets its own
+                      password, HMAC-SHA256(master, "heirloom/v1/<namespace>/<policy>") in hex, copied into a Secret in the
+                      policy's namespace. A tenant therefore only ever holds the key to its own repository.
+                      Changing the master later makes every existing repository unreadable: restic cannot rekey from here.
+                    properties:
+                      key:
+                        default: password
+                        type: string
+                      name:
+                        minLength: 1
+                        type: string
+                      namespace:
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                required:
+                - passwordSecretRef
+                type: object
               nfs:
                 description: NFSSpec points at an NFS export that receives the restic
                   repositories.

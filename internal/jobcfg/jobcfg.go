@@ -29,6 +29,10 @@ import (
 
 const (
 	EnvConfig = "BS_CONFIG"
+	// EnvRepoPassword is restic's own variable for the repository password.
+	EnvRepoPassword = "RESTIC_PASSWORD"
+	// KeySecretKey is the key of the per-policy Secret that holds the derived repository password.
+	KeySecretKey = "password"
 
 	StoreMount   = "/store"
 	SourceMount  = "/source"
@@ -72,6 +76,9 @@ type Config struct {
 	// Retention is already resolved (policy, else store, else default).
 	Retention snapshot.Retention `json:"retention"`
 	Restore   *Restore           `json:"restore,omitempty"`
+	// Encrypted means the repository has a password, passed in EnvRepoPassword. The mover then refuses to
+	// run without it rather than fall back to a passwordless repository.
+	Encrypted bool `json:"encrypted,omitempty"`
 }
 
 // StoreSubPath is the location of a policy's snapshots inside the NFS export, e.g. "<ns>/<policy>".
