@@ -16,18 +16,19 @@ spec:
   versions:
   - additionalPrinterColumns:
     - jsonPath: .spec.nfs.server
-      name: Server
+      name: NFS Server
       type: string
     - jsonPath: .spec.nfs.path
-      name: Path
+      name: NFS Path
       type: string
     - jsonPath: .spec.smb.server
       name: SMB Server
-      priority: 1
       type: string
     - jsonPath: .spec.smb.share
       name: SMB Share
-      priority: 1
+      type: string
+    - jsonPath: .spec.encryption.passwordSecretRef.name
+      name: Encryption
       type: string
     name: v1
     schema:

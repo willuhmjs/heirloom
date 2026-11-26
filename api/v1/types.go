@@ -106,10 +106,11 @@ type BackupStoreSpec struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
-// +kubebuilder:printcolumn:name="Server",type=string,JSONPath=`.spec.nfs.server`
-// +kubebuilder:printcolumn:name="Path",type=string,JSONPath=`.spec.nfs.path`
-// +kubebuilder:printcolumn:name="SMB Server",type=string,priority=1,JSONPath=`.spec.smb.server`
-// +kubebuilder:printcolumn:name="SMB Share",type=string,priority=1,JSONPath=`.spec.smb.share`
+// +kubebuilder:printcolumn:name="NFS Server",type=string,JSONPath=`.spec.nfs.server`
+// +kubebuilder:printcolumn:name="NFS Path",type=string,JSONPath=`.spec.nfs.path`
+// +kubebuilder:printcolumn:name="SMB Server",type=string,JSONPath=`.spec.smb.server`
+// +kubebuilder:printcolumn:name="SMB Share",type=string,JSONPath=`.spec.smb.share`
+// +kubebuilder:printcolumn:name="Encryption",type=string,JSONPath=`.spec.encryption.passwordSecretRef.name`
 type BackupStore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

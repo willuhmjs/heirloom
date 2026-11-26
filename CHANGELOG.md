@@ -9,6 +9,8 @@ API changes only come with a new major version.
 ### Fixed
 - An SMB store's volume handle now includes a hash of its mount options. csi-driver-smb keeps one staged mount per
   handle, so recreating a PV with different options (for example adding `nobrl`) kept mounting with the old ones.
+- `kubectl get backupstores` (and dashboards that read printer columns) show the SMB server and share, and the
+  encryption secret, next to the NFS columns; before, an SMB store listed an empty server and path.
 - Docs: SQLite sources stage their copy on the store and need the `nobrl` mount option on SMB (CIFS byte-range
   locks otherwise fail with "database is locked").
 
